@@ -1,10 +1,3 @@
-//
-//  MainView.swift
-//  PrimeVis
-//
-//  Created by Johan Karlsson on 2025-03-29.
-//
-
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -18,17 +11,18 @@ struct MainView: View {
     
     init() {
         let config = ConfigurationController()
+        _configController = StateObject(wrappedValue: config)
         _visualizationController = StateObject(wrappedValue: VisualizationController(configController: config))
     }
     
     var body: some View {
-        NavigationView {
+        NavigationSplitView {
             ControlPanel(
                 configController: configController,
                 visualizationController: visualizationController
             )
             .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
-            
+        } detail: {
             VisualizationView(controller: visualizationController)
                 .frame(minWidth: 500, minHeight: 400)
         }
@@ -40,6 +34,7 @@ struct MainView: View {
                     Label("Generate", systemImage: "wand.and.stars")
                 }
                 .disabled(visualizationController.isGenerating)
+                .help("Generate visualization")
             }
             
             ToolbarItem(placement: .automatic) {
@@ -49,6 +44,7 @@ struct MainView: View {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
                 .disabled(visualizationController.currentImage == nil || visualizationController.isGenerating)
+                .help("Save visualization as image")
             }
             
             ToolbarItem(placement: .automatic) {
@@ -57,6 +53,7 @@ struct MainView: View {
                 }) {
                     Label("Legend", systemImage: "info.circle")
                 }
+                .help("Show legend")
             }
             
             ToolbarItem(placement: .automatic) {
@@ -65,16 +62,39 @@ struct MainView: View {
                 }) {
                     Label("About", systemImage: "questionmark.circle")
                 }
+                .help("About Prime Visualizer")
             }
         }
         .navigationTitle("Prime Visualizer")
         .sheet(isPresented: $isShowingLegend) {
-            LegendView(colors: configController.configuration.colors)
-                .frame(minWidth: 600, minHeight: 500)
+            NavigationStack {
+                LegendView(colors: configController.configuration.colors)
+                    .navigationTitle("Prime Types Legend")
+                    // navigationBarTitleDisplayMode not available in macOS
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isShowingLegend = false
+                            }
+                        }
+                    }
+                    .frame(minWidth: 600, minHeight: 500)
+            }
         }
         .sheet(isPresented: $isShowingAbout) {
-            AboutView()
-                .frame(width: 400, height: 300)
+            NavigationStack {
+                AboutView()
+                    .navigationTitle("About")
+                    // navigationBarTitleDisplayMode not available in macOS
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isShowingAbout = false
+                            }
+                        }
+                    }
+                    .frame(width: 400, height: 450)
+            }
         }
         .fileExporter(
             isPresented: $isShowingSaveDialog,
@@ -132,11 +152,5 @@ struct ImageDocument: FileDocument {
         }
         
         return .init(regularFileWithContents: data)
-    }
-}
-
-struct MainView_Previews: PreviewProvider {
-    static var previews: some View {
-        MainView()
     }
 }

@@ -5,10 +5,10 @@ struct ControlPanel: View {
     @ObservedObject var visualizationController: VisualizationController
     
     @State private var selectedTab = 0
-    @State private var gridColumns: Int
-    @State private var gridRows: Int
-    @State private var dotSize: Int
-    @State private var spacing: Int
+    @State private var gridColumns: String
+    @State private var gridRows: String
+    @State private var dotSize: String
+    @State private var spacing: String
     @State private var backgroundColor: Color
     
     init(configController: ConfigurationController, visualizationController: VisualizationController) {
@@ -17,10 +17,10 @@ struct ControlPanel: View {
         
         // Initialize state from current configuration
         let grid = configController.configuration.grid
-        _gridColumns = State(initialValue: grid.columns)
-        _gridRows = State(initialValue: grid.rows)
-        _dotSize = State(initialValue: grid.dotSize)
-        _spacing = State(initialValue: grid.spacing)
+        _gridColumns = State(initialValue: String(grid.columns))
+        _gridRows = State(initialValue: String(grid.rows))
+        _dotSize = State(initialValue: String(grid.dotSize))
+        _spacing = State(initialValue: String(grid.spacing))
         _backgroundColor = State(initialValue: grid.backgroundColor)
     }
     
@@ -71,63 +71,48 @@ struct ControlPanel: View {
     // Settings view
     private var settingsView: some View {
         ScrollView {
-            Form {
-                Section(header: Text("Grid Settings")) {
-                    HStack {
-                        Text("Columns:")
-                        Spacer()
-                        Stepper("\(gridColumns)", value: $gridColumns, in: 10...1000)
+            VStack(spacing: 16) {
+                // Grid settings
+                GroupBox(label: Text("Grid Settings").font(.headline)) {
+                    VStack(spacing: 12) {
+                        numericField(label: "Columns:", value: $gridColumns, range: 1...100000)
+                        numericField(label: "Rows:", value: $gridRows, range: 1...100000)
+                        numericField(label: "Dot Size:", value: $dotSize, range: 1...50)
+                        numericField(label: "Spacing:", value: $spacing, range: 0...20)
+                        ColorPicker("Background Color:", selection: $backgroundColor)
+                            .padding(.vertical, 4)
                     }
-                    
-                    HStack {
-                        Text("Rows:")
-                        Spacer()
-                        Stepper("\(gridRows)", value: $gridRows, in: 10...1000)
-                    }
-                    
-                    HStack {
-                        Text("Dot Size:")
-                        Spacer()
-                        Stepper("\(dotSize)", value: $dotSize, in: 1...50)
-                    }
-                    
-                    HStack {
-                        Text("Spacing:")
-                        Spacer()
-                        Stepper("\(spacing)", value: $spacing, in: 0...20)
-                    }
-                    
-                    ColorPicker("Background Color:", selection: $backgroundColor)
-                        .padding(.vertical, 4)
+                    .padding(8)
                 }
                 
-                Section(header: Text("Prime Colors")) {
+                // Prime colors
+                GroupBox(label: Text("Prime Colors").font(.headline)) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(PrimeType.allCases) { primeType in
                                 colorPickerRow(for: primeType)
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(8)
                     }
                     .frame(maxHeight: 300)
                 }
                 
-                Section {
-                    Button("Reset to Defaults") {
-                        configController.resetToDefaults()
-                        
-                        // Update local state
-                        let grid = configController.configuration.grid
-                        gridColumns = grid.columns
-                        gridRows = grid.rows
-                        dotSize = grid.dotSize
-                        spacing = grid.spacing
-                        backgroundColor = grid.backgroundColor
-                    }
-                    .foregroundColor(.red)
+                Button("Reset to Defaults") {
+                    configController.resetToDefaults()
+                    
+                    // Update local state
+                    let grid = configController.configuration.grid
+                    gridColumns = String(grid.columns)
+                    gridRows = String(grid.rows)
+                    dotSize = String(grid.dotSize)
+                    spacing = String(grid.spacing)
+                    backgroundColor = grid.backgroundColor
                 }
+                .foregroundColor(.red)
+                .padding(.top, 8)
             }
+            .padding()
         }
     }
     
@@ -186,6 +171,46 @@ struct ControlPanel: View {
     
     // MARK: - Helper Views
     
+    private func numericField(label: String, value: Binding<String>, range: ClosedRange<Int>) -> some View {
+        HStack {
+            Text(label)
+                .frame(width: 100, alignment: .leading)
+            
+            TextField("", text: value)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(maxWidth: .infinity)
+                .onChange(of: value.wrappedValue) { oldValue, newValue in
+                    let filtered = newValue.filter { "0123456789".contains($0) }
+                    if filtered != newValue {
+                        value.wrappedValue = filtered
+                    }
+                    
+                    if let num = Int(filtered), !range.contains(num) {
+                        if num < range.lowerBound {
+                            value.wrappedValue = String(range.lowerBound)
+                        } else if num > range.upperBound {
+                            value.wrappedValue = String(range.upperBound)
+                        }
+                    }
+                }
+            
+            Stepper("", onIncrement: {
+                if let num = Int(value.wrappedValue), num < range.upperBound {
+                    value.wrappedValue = String(num + 1)
+                } else {
+                    value.wrappedValue = String(range.lowerBound)
+                }
+            }, onDecrement: {
+                if let num = Int(value.wrappedValue), num > range.lowerBound {
+                    value.wrappedValue = String(num - 1)
+                } else {
+                    value.wrappedValue = String(range.upperBound)
+                }
+            })
+            .labelsHidden()
+        }
+    }
+    
     private func colorPickerRow(for primeType: PrimeType) -> some View {
         HStack {
             Text(primeType.displayName)
@@ -203,9 +228,14 @@ struct ControlPanel: View {
     // MARK: - Helper Methods
     
     private func updateConfiguration() {
+        let columns = Int(gridColumns) ?? configController.configuration.grid.columns
+        let rows = Int(gridRows) ?? configController.configuration.grid.rows
+        let dotSize = Int(dotSize) ?? configController.configuration.grid.dotSize
+        let spacing = Int(spacing) ?? configController.configuration.grid.spacing
+        
         let newGridSettings = GridSettings(
-            columns: gridColumns,
-            rows: gridRows,
+            columns: columns,
+            rows: rows,
             dotSize: dotSize,
             spacing: spacing,
             backgroundColor: backgroundColor

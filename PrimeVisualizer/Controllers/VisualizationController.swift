@@ -1,10 +1,3 @@
-//
-//  VisualizationController.swift
-//  PrimeVis
-//
-//  Created by Johan Karlsson on 2025-03-29.
-//
-
 import Foundation
 import SwiftUI
 import Combine
@@ -40,6 +33,7 @@ class VisualizationController: ObservableObject {
             guard let self = self else { return }
             
             do {
+                print("Starting visualization generation...")
                 // Generate the visualization
                 let stats = try ImageGenerator.generateVisualization(
                     columns: config.grid.columns,
@@ -48,21 +42,30 @@ class VisualizationController: ObservableObject {
                     spacing: config.grid.spacing,
                     colors: config.colors,
                     backgroundColor: config.grid.backgroundColor,
-                    outputPath: config.application.defaultOutputFile
+                    outputPath: self.resolveOutputPath(config.application.defaultOutputFile)
                 )
                 
+                print("Generation completed, loading image...")
+                
                 // Load the generated image
-                let image = NSImage(contentsOfFile: config.application.defaultOutputFile)
+                let outputPath = self.resolveOutputPath(config.application.defaultOutputFile)
+                let image = NSImage(contentsOfFile: outputPath)
                 
                 // Update UI on main thread
                 DispatchQueue.main.async {
-                    self.currentImage = image
-                    self.statistics = stats
+                    if let image = image {
+                        self.currentImage = image
+                        self.statistics = stats
+                        // Start with zoom = 1, will be adjusted by autoFitImage
+                        self.zoomLevel = 1.0
+                    } else {
+                        self.errorMessage = "Failed to load the generated image"
+                    }
                     self.isGenerating = false
-                    self.zoomLevel = 1.0
                 }
             } catch {
                 // Handle errors
+                print("Error generating visualization: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self.errorMessage = error.localizedDescription
                     self.isGenerating = false
@@ -80,8 +83,10 @@ class VisualizationController: ObservableObject {
             return false
         }
         
+        let resolvedPath = resolveOutputPath(path)
+        
         // Ensure directory exists
-        let directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let directoryURL = URL(fileURLWithPath: resolvedPath).deletingLastPathComponent()
         let fileManager = FileManager.default
         
         if !fileManager.fileExists(atPath: directoryURL.path) {
@@ -103,7 +108,7 @@ class VisualizationController: ObservableObject {
         
         // Write to file
         do {
-            try pngData.write(to: URL(fileURLWithPath: path))
+            try pngData.write(to: URL(fileURLWithPath: resolvedPath))
             return true
         } catch {
             errorMessage = "Failed to write image to file: \(error.localizedDescription)"
@@ -123,5 +128,23 @@ class VisualizationController: ObservableObject {
     /// Reset zoom to 100%
     func resetZoom() {
         zoomLevel = 1.0
+    }
+    
+    /// Resolves the output path, expanding ~ to home directory if needed
+    /// - Parameter path: Original path
+    /// - Returns: Resolved path
+    private func resolveOutputPath(_ path: String) -> String {
+        if path.starts(with: "~") {
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+            return path.replacingOccurrences(of: "~", with: homeDirectory)
+        }
+        
+        // If it's not an absolute path, save to Documents directory
+        if !path.starts(with: "/") {
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documentsURL.appendingPathComponent(path).path
+        }
+        
+        return path
     }
 }

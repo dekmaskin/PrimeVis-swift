@@ -8,12 +8,18 @@
 
 /* Begin PBXFileReference section */
 		046ED6F92D9842F1007AC4AB /* PrimeVis.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PrimeVis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		04C73F2D2D98536600E984B4 /* grab_source.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = grab_source.py; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		046ED6FB2D9842F1007AC4AB /* PrimeVis */ = {
+		046ED6FB2D9842F1007AC4AB /* PrimeVisualizer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = PrimeVis;
+			path = PrimeVisualizer;
+			sourceTree = "<group>";
+		};
+		046ED7122D98449D007AC4AB /* PrimeVisualizerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PrimeVisualizerTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,8 +38,10 @@
 		046ED6F02D9842F1007AC4AB = {
 			isa = PBXGroup;
 			children = (
-				046ED6FB2D9842F1007AC4AB /* PrimeVis */,
+				046ED7122D98449D007AC4AB /* PrimeVisualizerTests */,
+				046ED6FB2D9842F1007AC4AB /* PrimeVisualizer */,
 				046ED6FA2D9842F1007AC4AB /* Products */,
+				04C73F2D2D98536600E984B4 /* grab_source.py */,
 			);
 			sourceTree = "<group>";
 		};
@@ -61,7 +69,8 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				046ED6FB2D9842F1007AC4AB /* PrimeVis */,
+				046ED6FB2D9842F1007AC4AB /* PrimeVisualizer */,
+				046ED7122D98449D007AC4AB /* PrimeVisualizerTests */,
 			);
 			name = PrimeVis;
 			packageProductDependencies = (
@@ -158,6 +167,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_ENTITLEMENTS = "\"PrimeVisualizer/PrimeVis.entitlements\"";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -221,6 +231,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_ENTITLEMENTS = "\"PrimeVisualizer/PrimeVis.entitlements\"";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -248,11 +259,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = PrimeVis/PrimeVis.entitlements;
+				CODE_SIGN_ENTITLEMENTS = PrimeVisualizer/PrimeVis.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"PrimeVis/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = PrimeVisualizer;
 				DEVELOPMENT_TEAM = 2GC53K849D;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -265,6 +278,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.johank.PrimeVis;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -275,11 +289,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = PrimeVis/PrimeVis.entitlements;
+				CODE_SIGN_ENTITLEMENTS = PrimeVisualizer/PrimeVis.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"PrimeVis/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = PrimeVisualizer;
 				DEVELOPMENT_TEAM = 2GC53K849D;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -292,6 +308,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.johank.PrimeVis;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};

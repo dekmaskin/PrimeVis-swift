@@ -1,0 +1,2408 @@
+# Source Code Collection
+# Generated: 2025-03-30 10:08:26
+# Root Path: /Users/johan/Documents/Code/PrimeVisu/PrimeVis
+# Included Extensions: .swift, .json, .entitlements
+# Excluded Directories: venv, __pycache__, .git, node_modules, dist, build, logs
+
+## Project Directory Structure
+
+```
+PrimeVis/
+  grab_source.py
+  primevis.txt
+PrimeVis.xcodeproj/
+  project.pbxproj
+  xcuserdata/
+    johan.xcuserdatad/
+      xcschemes/
+        xcschememanagement.plist
+  project.xcworkspace/
+    contents.xcworkspacedata
+    xcuserdata/
+      johan.xcuserdatad/
+        UserInterfaceState.xcuserstate
+    xcshareddata/
+      swiftpm/
+        configuration/
+PrimeVisualizerTests/
+PrimeVisualizer/
+  AppDelegate.swift
+  ContentView.swift
+  PrimeVis.entitlements
+  PrimeVisApp.swift
+  Core/
+    ImageGenerator.swift
+    PrimeClassifier.swift
+    PrimeGenerator.swift
+  Resources/
+    DefaultConfig.json
+    Assets.xcassets/
+      Contents.json
+      AppIcon.appiconset/
+        Contents.json
+      AccentColor.colorset/
+        Contents.json
+  Utils/
+    ColorUtils.swift
+  Models/
+    Configuration.swift
+    GridSettings.swift
+    PrimeNumber.swift
+    PrimeType.swift
+  Preview Content/
+    Preview Assets.xcassets/
+      Contents.json
+  Base.lproj/
+    PrimeVis.entitlements
+  Extensions/
+    ColorExtensions.swift
+  Controllers/
+    ConfigurationController.swift
+    VisualizationController.swift
+  Views/
+    AboutView.swift
+    ControlPanel.swift
+    LegendView.swift
+    MainView.swift
+    StatisticsView.swift
+    VisualizationView.swift
+Base.lproj/
+  PrimeVis.entitlements
+```
+
+## Source Code Files
+
+### File: PrimeVisualizer/AppDelegate.swift
+
+```swift
+//
+//  AppDelegate.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+import SwiftUI
+import AppKit
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Application setup code
+        setupDefaults()
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        // Application cleanup code
+    }
+    
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
+    }
+    
+    private func setupDefaults() {
+        // Create application support directory if needed
+        let fileManager = FileManager.default
+        let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDirectoryURL = appSupportURL.appendingPathComponent("PrimeVisualizer", isDirectory: true)
+        
+        if !fileManager.fileExists(atPath: appDirectoryURL.path) {
+            try? fileManager.createDirectory(at: appDirectoryURL, withIntermediateDirectories: true)
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/ContentView.swift
+
+```swift
+//
+//  ContentView.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    var body: some View {
+        VStack {
+            Image(systemName: "globe")
+                .imageScale(.large)
+                .foregroundStyle(.tint)
+            Text("Hello, world!")
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}
+```
+
+### File: PrimeVisualizer/PrimeVis.entitlements
+
+```entitlements
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+```
+
+### File: PrimeVisualizer/PrimeVisApp.swift
+
+```swift
+//
+//  PrimeVisApp.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+import SwiftUI
+
+@main
+struct PrimeVisualizerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
+    var body: some Scene {
+        WindowGroup {
+            MainView()
+                .frame(minWidth: 800, minHeight: 600)
+        }
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
+        .commands {
+            // Add menu commands
+            CommandGroup(replacing: .newItem) {
+                Button("Generate Visualization") {
+                    NotificationCenter.default.post(name: .generateVisualization, object: nil)
+                }
+                .keyboardShortcut("g", modifiers: [.command])
+            }
+            
+            CommandGroup(replacing: .saveItem) {
+                Button("Save Visualization...") {
+                    NotificationCenter.default.post(name: .saveVisualization, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command])
+            }
+            
+            CommandMenu("Settings") {
+                Button("Reset to Defaults") {
+                    NotificationCenter.default.post(name: .resetToDefaults, object: nil)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Notification Names
+extension Notification.Name {
+    static let generateVisualization = Notification.Name("generateVisualization")
+    static let saveVisualization = Notification.Name("saveVisualization")
+    static let resetToDefaults = Notification.Name("resetToDefaults")
+}
+```
+
+### File: PrimeVisualizer/Core/ImageGenerator.swift
+
+```swift
+import Foundation
+import SwiftUI
+import CoreGraphics
+import AppKit
+
+// MARK: - VisualizationError
+enum VisualizationError: Error {
+    case imageGenerationFailed
+    case imageWriteFailed
+    case directoryCreationFailed
+}
+
+// MARK: - ImageGenerator
+class ImageGenerator {
+    /// Calculate image dimensions based on grid specifications
+    /// - Parameters:
+    ///   - columns: Number of dots in the x-axis
+    ///   - rows: Number of dots in the y-axis
+    ///   - dotSize: Size of each dot in pixels
+    ///   - spacing: Spacing between dots in pixels
+    /// - Returns: Tuple of image width, height, and total positions
+    static func calculateDimensions(
+        columns: Int,
+        rows: Int,
+        dotSize: Int,
+        spacing: Int
+    ) -> (width: Int, height: Int, totalPositions: Int) {
+        let imageWidth = columns * (dotSize + spacing) - spacing
+        let imageHeight = rows * (dotSize + spacing) - spacing
+        let totalPositions = columns * rows
+        
+        return (imageWidth, imageHeight, totalPositions)
+    }
+    
+    /// Create a grid with prime positions and their classifications
+    /// - Parameters:
+    ///   - totalPositions: Total number of positions in the grid
+    ///   - columns: Number of columns in the grid
+    ///   - rows: Number of rows in the grid
+    /// - Returns: Array of PrimePoint objects
+    static func createPrimeGrid(
+        totalPositions: Int,
+        columns: Int,
+        rows: Int
+    ) -> [PrimePoint] {
+        // Generate primes up to the total number of positions
+        let primesSet = PrimeGenerator.generatePrimesSet(upTo: totalPositions)
+        
+        // For each position in the grid, check if it's prime
+        var primePoints: [PrimePoint] = []
+        
+        for pos in 1..<totalPositions {  // Start from 1, not 0
+            // Convert position to 2D coordinates
+            let x = pos % columns
+            let y = pos / columns
+            
+            if primesSet.contains(pos) {
+                let primeType = PrimeClassifier.classifyPrime(pos, primesSet: primesSet)
+                primePoints.append(PrimePoint(x: x, y: y, type: primeType))
+            }
+        }
+        
+        return primePoints
+    }
+    
+    /// Generate a prime number visualization
+    /// - Parameters:
+    ///   - columns: Number of columns in the grid
+    ///   - rows: Number of rows in the grid
+    ///   - dotSize: Size of each dot in pixels
+    ///   - spacing: Spacing between dots in pixels
+    ///   - colors: Color mapping for prime types
+    ///   - backgroundColor: Background color
+    ///   - outputPath: Path to save the output image
+    /// - Returns: Statistics about the visualization
+    static func generateVisualization(
+        columns: Int,
+        rows: Int,
+        dotSize: Int,
+        spacing: Int,
+        colors: [String: Color],
+        backgroundColor: Color,
+        outputPath: String
+    ) throws -> VisualizationStatistics {
+        // Use default values if invalid parameters are provided
+        let safeColumns = max(10, columns)
+        let safeRows = max(10, rows)
+        let safeDotSize = max(1, dotSize)
+        let safeSpacing = max(0, spacing)
+        
+        // Calculate dimensions
+        let (width, height, totalPositions) = calculateDimensions(
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing
+        )
+        
+        print("Generating visualization with dimensions: \(width)×\(height), totalPositions: \(totalPositions)")
+        
+        // Generate prime positions
+        let primePoints = createPrimeGrid(
+            totalPositions: totalPositions,
+            columns: safeColumns,
+            rows: safeRows
+        )
+        
+        print("Generated \(primePoints.count) prime points")
+        
+        // Ensure we have a valid path
+        let resolvedPath = resolveOutputPath(outputPath)
+        print("Saving to path: \(resolvedPath)")
+        
+        // Draw the visualization
+        guard let image = drawVisualization(
+            primePoints: primePoints,
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing,
+            colors: colors,
+            backgroundColor: backgroundColor,
+            width: width,
+            height: height
+        ) else {
+            print("Failed to draw visualization")
+            throw VisualizationError.imageGenerationFailed
+        }
+        
+        // Save the image
+        try saveImage(image, to: resolvedPath)
+        print("Image saved to \(resolvedPath)")
+        
+        // Generate and return statistics
+        return generateStatistics(
+            primePoints: primePoints,
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing,
+            width: width,
+            height: height,
+            totalPositions: totalPositions
+        )
+    }
+    
+    /// Resolves the output path, expanding ~ to home directory if needed
+    /// - Parameter path: Original path
+    /// - Returns: Resolved path
+    private static func resolveOutputPath(_ path: String) -> String {
+        if path.starts(with: "~") {
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+            return path.replacingOccurrences(of: "~", with: homeDirectory)
+        }
+        
+        // If it's not an absolute path, save to Documents directory
+        if !path.starts(with: "/") {
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documentsURL.appendingPathComponent(path).path
+        }
+        
+        return path
+    }
+    
+    /// Draw the prime visualization to an image
+    /// - Parameters:
+    ///   - primePoints: Array of PrimePoint objects
+    ///   - columns: Number of columns in the grid
+    ///   - rows: Number of rows in the grid
+    ///   - dotSize: Size of each dot in pixels
+    ///   - spacing: Spacing between dots in pixels
+    ///   - colors: Color mapping for prime types
+    ///   - backgroundColor: Background color
+    ///   - width: Image width
+    ///   - height: Image height
+    /// - Returns: The generated image
+    private static func drawVisualization(
+        primePoints: [PrimePoint],
+        columns: Int,
+        rows: Int,
+        dotSize: Int,
+        spacing: Int,
+        colors: [String: Color],
+        backgroundColor: Color,
+        width: Int,
+        height: Int
+    ) -> CGImage? {
+        // Create a bitmap context
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        
+        // Ensure width and height are valid
+        let safeWidth = max(1, width)
+        let safeHeight = max(1, height)
+        
+        guard let context = CGContext(
+            data: nil,
+            width: safeWidth,
+            height: safeHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo.rawValue
+        ) else {
+            print("Could not create graphics context")
+            return nil
+        }
+        
+        // Set background color
+        let bgNSColor = NSColor(backgroundColor)
+        context.setFillColor(bgNSColor.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: safeWidth, height: safeHeight))
+        
+        // Draw dots
+        for point in primePoints {
+            // Get color for this prime type
+            let colorKey = point.type.rawValue
+            let color = colors[colorKey] ?? .black
+            let nsColor = NSColor(color)
+            
+            context.setFillColor(nsColor.cgColor)
+            
+            // Calculate position
+            let x = point.x * (dotSize + spacing)
+            // Flip y-coordinate to match traditional coordinate system
+            let y = safeHeight - (point.y * (dotSize + spacing)) - dotSize
+            
+            // Ensure the coordinates are within bounds
+            if x >= 0 && x < safeWidth && y >= 0 && y < safeHeight {
+                // Draw circle
+                let rect = CGRect(x: x, y: y, width: dotSize, height: dotSize)
+                context.fillEllipse(in: rect)
+            }
+        }
+        
+        // Return the CGImage
+        return context.makeImage()
+    }
+    
+    /// Save a CGImage to the specified path
+    /// - Parameters:
+    ///   - image: The CGImage to save
+    ///   - path: Path to save the image to
+    /// - Throws: VisualizationError if saving fails
+    private static func saveImage(_ image: CGImage, to path: String) throws {
+        // Ensure directory exists
+        let directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let fileManager = FileManager.default
+        
+        if !fileManager.fileExists(atPath: directoryURL.path) {
+            do {
+                try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            } catch {
+                print("Failed to create directory: \(error.localizedDescription)")
+                throw VisualizationError.directoryCreationFailed
+            }
+        }
+        
+        // Create NSImage from CGImage
+        let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        
+        // Convert to png data
+        guard let imageData = nsImage.tiffRepresentation,
+              let bitmapRep = NSBitmapImageRep(data: imageData),
+              let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+            print("Failed to create PNG data")
+            throw VisualizationError.imageWriteFailed
+        }
+        
+        // Write to file
+        do {
+            try pngData.write(to: URL(fileURLWithPath: path))
+        } catch {
+            print("Failed to write image to file: \(error.localizedDescription)")
+            throw VisualizationError.imageWriteFailed
+        }
+    }
+    
+    /// Generate statistics about the visualization
+    /// - Parameters:
+    ///   - primePoints: Array of prime points
+    ///   - columns: Number of columns in the grid
+    ///   - rows: Number of rows in the grid
+    ///   - dotSize: Size of each dot in pixels
+    ///   - spacing: Spacing between dots in pixels
+    ///   - width: Image width
+    ///   - height: Image height
+    ///   - totalPositions: Total positions in the grid
+    /// - Returns: VisualizationStatistics object
+    private static func generateStatistics(
+        primePoints: [PrimePoint],
+        columns: Int,
+        rows: Int,
+        dotSize: Int,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        totalPositions: Int
+    ) -> VisualizationStatistics {
+        // Count prime types
+        var primeTypeCounts: [PrimeType: Int] = [:]
+        
+        for point in primePoints {
+            let count = primeTypeCounts[point.type] ?? 0
+            primeTypeCounts[point.type] = count + 1
+        }
+        
+        // Calculate statistics
+        let totalPrimes = primePoints.count
+        let density = Double(totalPrimes) / Double(totalPositions) * 100.0
+        
+        return VisualizationStatistics(
+            width: width,
+            height: height,
+            gridColumns: columns,
+            gridRows: rows,
+            totalPositions: totalPositions,
+            totalPrimes: totalPrimes,
+            density: density,
+            primeTypes: primeTypeCounts
+        )
+    }
+}
+```
+
+### File: PrimeVisualizer/Core/PrimeClassifier.swift
+
+```swift
+//
+//  PrimeClassifier.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+import Foundation
+
+class PrimeClassifier {
+    /// Checks if a number is part of a twin prime pair (p, p+2)
+    /// - Parameters:
+    ///   - n: The number to check
+    ///   - primesSet: Set of primes to check against
+    /// - Returns: True if n is part of a twin prime pair
+    static func isTwinPrime(_ n: Int, primesSet: Set<Int>) -> Bool {
+        return primesSet.contains(n) && (primesSet.contains(n - 2) || primesSet.contains(n + 2))
+    }
+    
+    /// Checks if a number is a Mersenne prime (2^p - 1)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Mersenne prime
+    static func isMersennePrime(_ n: Int) -> Bool {
+        // First check if n is prime
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        // Check if n is of the form 2^p - 1
+        let nPlus1 = n + 1
+        if nPlus1 & (nPlus1 - 1) != 0 { // Check if n+1 is a power of 2
+            return false
+        }
+        
+        // Check if the exponent p is also prime
+        let p = log2(Double(nPlus1))
+        return PrimeGenerator.isPrime(Int(p))
+    }
+    
+    /// Checks if a number is a safe prime (p where (p-1)/2 is also prime)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a safe prime
+    static func isSafePrime(_ n: Int) -> Bool {
+        return n > 2 && PrimeGenerator.isPrime(n) && PrimeGenerator.isPrime((n - 1) / 2)
+    }
+    
+    /// Checks if a number is a Sophie Germain prime (p where 2p+1 is also prime)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Sophie Germain prime
+    static func isSophieGermainPrime(_ n: Int) -> Bool {
+        return PrimeGenerator.isPrime(n) && PrimeGenerator.isPrime(2 * n + 1)
+    }
+    
+    /// Checks if a number is a palindromic prime (reads the same forwards and backwards)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a palindromic prime
+    static func isPalindromicPrime(_ n: Int) -> Bool {
+        let str = String(n)
+        return PrimeGenerator.isPrime(n) && str == String(str.reversed())
+    }
+    
+    /// Checks if a number is a circular prime (all rotations of its digits are prime)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a circular prime
+    static func isCircularPrime(_ n: Int) -> Bool {
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        let strN = String(n)
+        // Single digit primes are automatically circular
+        if strN.count == 1 {
+            return true
+        }
+        
+        // Check all rotations
+        for i in 1..<strN.count {
+            let rotatedStr = String(strN.suffix(strN.count - i) + strN.prefix(i))
+            if let rotated = Int(rotatedStr), !PrimeGenerator.isPrime(rotated) {
+                return false
+            }
+        }
+        
+        return true
+    }
+    
+    /// Checks if a number is a factorial prime (of the form n! ± 1)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a factorial prime
+    static func isFactorialPrime(_ n: Int) -> Bool {
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        // Check if n is of the form i! + 1 or i! - 1 for some i
+        var factorial = 1
+        var i = 1
+        
+        // Check up to a reasonable limit
+        while factorial < n + 1 && i < 20 {
+            factorial *= i
+            if n == factorial - 1 || n == factorial + 1 {
+                return true
+            }
+            i += 1
+        }
+        
+        return false
+    }
+    
+    /// Checks if a number is a Fibonacci prime (a prime that is also a Fibonacci number)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Fibonacci prime
+    static func isFibonacciPrime(_ n: Int) -> Bool {
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        // A number is Fibonacci if and only if 5n² + 4 or 5n² - 4 is a perfect square
+        func isPerfectSquare(_ x: Int) -> Bool {
+            let sqrt = Int(sqrt(Double(x)))
+            return sqrt * sqrt == x
+        }
+        
+        return isPerfectSquare(5 * n * n + 4) || isPerfectSquare(5 * n * n - 4)
+    }
+    
+    /// Checks if a number is part of a sexy prime pair (primes p, p+6)
+    /// - Parameters:
+    ///   - n: The number to check
+    ///   - primesSet: Set of primes to check against
+    /// - Returns: True if n is part of a sexy prime pair
+    static func isSexyPrime(_ n: Int, primesSet: Set<Int>) -> Bool {
+        return PrimeGenerator.isPrime(n) && (primesSet.contains(n + 6) || primesSet.contains(n - 6))
+    }
+    
+    /// Checks if a number is a Cuban prime (of the form 3m² + 3m + 1)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Cuban prime
+    static func isCubanPrime(_ n: Int) -> Bool {
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        // Check if n = 3m² + 3m + 1 for some m
+        // Solving for m: 3m² + 3m + 1 - n = 0
+        // Using quadratic formula: m = (-3 + sqrt(9 + 12*(n-1))) / 6
+        let discriminant = 9 + 12 * (n - 1)
+        let sqrtDiscriminant = sqrt(Double(discriminant))
+        
+        // Check if sqrtDiscriminant is an integer
+        if sqrtDiscriminant.truncatingRemainder(dividingBy: 1) != 0 {
+            return false
+        }
+        
+        let m = Double(-3 + Int(sqrtDiscriminant)) / 6.0
+        return m.truncatingRemainder(dividingBy: 1) == 0 && m >= 0
+    }
+    
+    /// Checks if a number is a happy number
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a happy number
+    static func isHappyNumber(_ n: Int) -> Bool {
+        var seen = Set<Int>()
+        var current = n
+        
+        while current != 1 && !seen.contains(current) {
+            seen.insert(current)
+            let digits = String(current).compactMap { Int(String($0)) }
+            current = digits.reduce(0) { $0 + $1 * $1 }
+        }
+        
+        return current == 1
+    }
+    
+    /// Checks if a number is a happy prime (a prime that is also a happy number)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a happy prime
+    static func isHappyPrime(_ n: Int) -> Bool {
+        return PrimeGenerator.isPrime(n) && isHappyNumber(n)
+    }
+    
+    /// Checks if a number is a Chen prime (p where p+2 is either prime or semiprime)
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Chen prime
+    static func isChenPrime(_ n: Int) -> Bool {
+        if !PrimeGenerator.isPrime(n) {
+            return false
+        }
+        
+        let nPlus2 = n + 2
+        
+        // Check if n+2 is prime
+        if PrimeGenerator.isPrime(nPlus2) {
+            return true
+        }
+        
+        // Check if n+2 is a semiprime (product of two primes)
+        if nPlus2 < 4 {
+            return false
+        }
+        
+        for i in 2...Int(sqrt(Double(nPlus2))) {
+            if nPlus2 % i == 0 {
+                // i is a factor, check if both i and nPlus2/i are prime
+                return PrimeGenerator.isPrime(i) && PrimeGenerator.isPrime(nPlus2 / i)
+            }
+        }
+        
+        return false
+    }
+    
+    /// Checks if a number is a Wieferich prime (p where 2^(p-1) ≡ 1 (mod p²))
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is a Wieferich prime
+    static func isWieferichPrime(_ n: Int) -> Bool {
+        // Only check known Wieferich primes due to computational constraints
+        return PrimeGenerator.isPrime(n) && (n == 1093 || n == 3511)
+    }
+    
+    /// Checks if a number is an isolated prime (neither n-2 nor n+2 is prime)
+    /// - Parameters:
+    ///   - n: The number to check
+    ///   - primesSet: Set of primes to check against
+    /// - Returns: True if n is an isolated prime
+    static func isIsolatedPrime(_ n: Int, primesSet: Set<Int>) -> Bool {
+        return PrimeGenerator.isPrime(n) &&
+               !primesSet.contains(n - 2) &&
+               !primesSet.contains(n + 2)
+    }
+    
+    /// Classifies a prime number by its type
+    /// - Parameters:
+    ///   - n: The prime number to classify
+    ///   - primesSet: Set of prime numbers to check against
+    /// - Returns: The type of prime
+    static func classifyPrime(_ n: Int, primesSet: Set<Int>) -> PrimeType {
+        // Check for special prime types in order of computational complexity
+        // and relative rarity to make interesting visualizations
+        if isMersennePrime(n) {
+            return .mersennePrime
+        } else if isFactorialPrime(n) {
+            return .factorialPrime
+        } else if isWieferichPrime(n) {
+            return .wieferichPrime
+        } else if isFibonacciPrime(n) {
+            return .fibonacciPrime
+        } else if isTwinPrime(n, primesSet: primesSet) {
+            return .twinPrime
+        } else if isSexyPrime(n, primesSet: primesSet) {
+            return .sexyPrime
+        } else if isIsolatedPrime(n, primesSet: primesSet) {
+            return .isolatedPrime
+        } else if isSafePrime(n) {
+            return .safePrime
+        } else if isSophieGermainPrime(n) {
+            return .sophieGermainPrime
+        } else if isChenPrime(n) {
+            return .chenPrime
+        } else if isPalindromicPrime(n) {
+            return .palindromicPrime
+        } else if isCircularPrime(n) {
+            return .circularPrime
+        } else if isCubanPrime(n) {
+            return .cubanPrime
+        } else if isHappyPrime(n) {
+            return .happyPrime
+        } else {
+            return .regularPrime
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Core/PrimeGenerator.swift
+
+```swift
+//
+//  PrimeGenerator.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+import Foundation
+
+class PrimeGenerator {
+    /// Checks if a number is prime
+    /// - Parameter n: The number to check
+    /// - Returns: True if n is prime, false otherwise
+    static func isPrime(_ n: Int) -> Bool {
+        if n <= 1 {
+            return false
+        }
+        if n <= 3 {
+            return true
+        }
+        if n % 2 == 0 || n % 3 == 0 {
+            return false
+        }
+        
+        // Check divisibility by numbers of form 6k ± 1
+        var i = 5
+        while i * i <= n {
+            if n % i == 0 || n % (i + 2) == 0 {
+                return false
+            }
+            i += 6
+        }
+        
+        return true
+    }
+    
+    /// Generates primes up to a limit using the Sieve of Eratosthenes
+    /// - Parameter limit: Upper bound for prime generation
+    /// - Returns: Array of prime numbers up to the limit
+    static func generatePrimes(upTo limit: Int) -> [Int] {
+        if limit < 2 {
+            return []
+        }
+        
+        // Initialize sieve
+        var sieve = [Bool](repeating: true, count: limit + 1)
+        sieve[0] = false
+        sieve[1] = false
+        
+        // Mark multiples of each prime as non-prime
+        for i in 2...Int(sqrt(Double(limit))) {
+            if sieve[i] {
+                for j in stride(from: i * i, through: limit, by: i) {
+                    sieve[j] = false
+                }
+            }
+        }
+        
+        // Collect the primes
+        var primes = [Int]()
+        for i in 2...limit {
+            if sieve[i] {
+                primes.append(i)
+            }
+        }
+        
+        return primes
+    }
+    
+    /// Generates a set of primes up to a limit
+    /// - Parameter limit: Upper bound for prime generation
+    /// - Returns: Set of prime numbers up to the limit
+    static func generatePrimesSet(upTo limit: Int) -> Set<Int> {
+        return Set(generatePrimes(upTo: limit))
+    }
+    
+    /// Estimates the number of primes less than or equal to x using Prime Number Theorem
+    /// - Parameter x: The upper bound
+    /// - Returns: Estimated number of primes
+    static func primeCountEstimate(_ x: Int) -> Int {
+        if x < 2 {
+            return 0
+        }
+        return Int(Double(x) / log(Double(x)))
+    }
+}
+```
+
+### File: PrimeVisualizer/Resources/DefaultConfig.json
+
+```json
+{
+  "grid": {
+    "columns": 100,
+    "rows": 100,
+    "dot_size": 8,
+    "spacing": 2,
+    "background_color": [255, 255, 255]
+  },
+  "colors": {
+    "regular_prime": [0, 0, 0],
+    "twin_prime": [255, 0, 0],
+    "mersenne_prime": [0, 255, 0],
+    "safe_prime": [0, 0, 255],
+    "palindromic_prime": [255, 165, 0],
+    "circular_prime": [128, 0, 128],
+    "sophie_germain_prime": [255, 192, 203],
+    "factorial_prime": [165, 42, 42],
+    "fibonacci_prime": [255, 215, 0],
+    "sexy_prime": [255, 20, 147],
+    "cuban_prime": [0, 255, 255],
+    "happy_prime": [124, 252, 0],
+    "chen_prime": [70, 130, 180],
+    "wieferich_prime": [255, 140, 0],
+    "isolated_prime": [128, 128, 128]
+  },
+  "application": {
+    "default_output_file": "~/Documents/prime_visualization.png",
+    "enable_statistics": true,
+    "save_config_on_exit": true
+  }
+}
+```
+
+### File: PrimeVisualizer/Resources/Assets.xcassets/Contents.json
+
+```json
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+```
+
+### File: PrimeVisualizer/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json
+
+```json
+{
+  "images" : [
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "16x16"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "16x16"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "32x32"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "32x32"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "128x128"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "128x128"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "256x256"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "256x256"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "512x512"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "512x512"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+```
+
+### File: PrimeVisualizer/Resources/Assets.xcassets/AccentColor.colorset/Contents.json
+
+```json
+{
+  "colors" : [
+    {
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+```
+
+### File: PrimeVisualizer/Utils/ColorUtils.swift
+
+```swift
+import SwiftUI
+
+struct ColorUtils {
+    /// Generates a color scale from one color to another
+    /// - Parameters:
+    ///   - from: Starting color
+    ///   - to: Ending color
+    ///   - steps: Number of colors to generate
+    /// - Returns: Array of colors forming a gradient
+    static func colorScale(from: Color, to: Color, steps: Int) -> [Color] {
+        guard steps > 1 else { return [from] }
+        
+        var colors: [Color] = []
+        
+        // Extract components
+        let fromComponents = from.cgColor?.components ?? [0, 0, 0, 1]
+        let toComponents = to.cgColor?.components ?? [1, 1, 1, 1]
+        
+        for step in 0..<steps {
+            let ratio = Double(step) / Double(steps - 1)
+            
+            let r = fromComponents[0] + (toComponents[0] - fromComponents[0]) * ratio
+            let g = fromComponents[1] + (toComponents[1] - fromComponents[1]) * ratio
+            let b = fromComponents[2] + (toComponents[2] - fromComponents[2]) * ratio
+            
+            colors.append(Color(.sRGB, red: r, green: g, blue: b, opacity: 1))
+        }
+        
+        return colors
+    }
+    
+    /// Generates a color that has good contrast with the given color
+    /// - Parameter color: Base color
+    /// - Returns: Contrasting color (either black or white)
+    static func contrastingColor(for color: Color) -> Color {
+        let components = color.cgColor?.components ?? [0, 0, 0, 1]
+        
+        // Simplified luminance calculation
+        let luminance = 0.299 * components[0] + 0.587 * components[1] + 0.114 * components[2]
+        
+        // Return white for dark colors, black for light colors
+        return luminance > 0.5 ? .black : .white
+    }
+    
+    /// Converts a hex string to Color
+    /// - Parameter hex: Hex color string (e.g., "#FF5500" or "FF5500")
+    /// - Returns: Color object
+    static func colorFromHex(_ hex: String) -> Color {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+        
+        var rgb: UInt64 = 0
+        
+        Scanner(string: hexSanitized).scanHexInt64(&rgb)
+        
+        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
+        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
+        let b = Double(rgb & 0x0000FF) / 255.0
+        
+        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
+    
+    /// Converts a Color to hex string
+    /// - Parameter color: Color to convert
+    /// - Returns: Hex color string (e.g., "#FF5500")
+    static func hexFromColor(_ color: Color) -> String {
+        let components = color.cgColor?.components ?? [0, 0, 0, 1]
+        
+        let r = Int(components[0] * 255.0)
+        let g = Int(components[1] * 255.0)
+        let b = Int(components[2] * 255.0)
+        
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+    
+    /// Generates an array of visually distinct colors
+    /// - Parameter count: Number of colors to generate
+    /// - Returns: Array of distinct colors
+    static func generateDistinctColors(_ count: Int) -> [Color] {
+        var colors: [Color] = []
+        
+        // Golden ratio conjugate
+        let hueIncrement = 0.618033988749895
+        var hue: Double = 0
+        
+        for _ in 0..<count {
+            hue += hueIncrement
+            hue = hue.truncatingRemainder(dividingBy: 1)
+            
+            let color = Color(hue: hue, saturation: 0.85, brightness: 0.9)
+            colors.append(color)
+        }
+        
+        return colors
+    }
+}
+```
+
+### File: PrimeVisualizer/Models/Configuration.swift
+
+```swift
+import Foundation
+import SwiftUI
+
+struct Configuration: Codable {
+    var grid: GridSettings
+    var colors: [String: Color]
+    var application: ApplicationSettings
+    
+    struct ApplicationSettings: Codable {
+        var defaultOutputFile: String
+        var enableStatistics: Bool
+        var saveConfigOnExit: Bool
+        
+        enum CodingKeys: String, CodingKey {
+            case defaultOutputFile = "default_output_file"
+            case enableStatistics = "enable_statistics"
+            case saveConfigOnExit = "save_config_on_exit"
+        }
+    }
+    
+    static var `default`: Configuration {
+        Configuration(
+            grid: GridSettings(),
+            colors: [
+                PrimeType.regularPrime.rawValue: Color.black,
+                PrimeType.twinPrime.rawValue: Color.red,
+                PrimeType.mersennePrime.rawValue: Color.green,
+                PrimeType.safePrime.rawValue: Color.blue
+            ],
+            application: ApplicationSettings(
+                defaultOutputFile: "prime_visualization.png",
+                enableStatistics: true,
+                saveConfigOnExit: true
+            )
+        )
+    }
+}
+```
+
+### File: PrimeVisualizer/Models/GridSettings.swift
+
+```swift
+import SwiftUI
+
+struct GridSettings: Codable {
+    var columns: Int
+    var rows: Int
+    var dotSize: Int
+    var spacing: Int
+    var backgroundColor: Color
+    
+    init(columns: Int = 100, rows: Int = 100, dotSize: Int = 8, spacing: Int = 2, backgroundColor: Color = .white) {
+        self.columns = columns
+        self.rows = rows
+        self.dotSize = dotSize
+        self.spacing = spacing
+        self.backgroundColor = backgroundColor
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case columns, rows
+        case dotSize = "dot_size"
+        case spacing
+        case backgroundColor = "background_color"
+    }
+}
+```
+
+### File: PrimeVisualizer/Models/PrimeNumber.swift
+
+```swift
+//
+//  PrimeNumber.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+import Foundation
+import SwiftUI
+
+// MARK: - PrimeType Enum
+enum PrimeType: String, CaseIterable, Identifiable, Codable {
+    case regularPrime = "regular_prime"
+    case twinPrime = "twin_prime"
+    case mersennePrime = "mersenne_prime"
+    case safePrime = "safe_prime"
+    case palindromicPrime = "palindromic_prime"
+    case circularPrime = "circular_prime"
+    case sophieGermainPrime = "sophie_germain_prime"
+    case factorialPrime = "factorial_prime"
+    case fibonacciPrime = "fibonacci_prime"
+    case sexyPrime = "sexy_prime"
+    case cubanPrime = "cuban_prime"
+    case happyPrime = "happy_prime"
+    case chenPrime = "chen_prime"
+    case wieferichPrime = "wieferich_prime"
+    case isolatedPrime = "isolated_prime"
+    
+    var id: String { self.rawValue }
+    
+    var displayName: String {
+        rawValue.split(separator: "_").map { $0.capitalized }.joined(separator: " ")
+    }
+    
+    var description: String {
+        switch self {
+        case .regularPrime:
+            return "Standard prime numbers"
+        case .twinPrime:
+            return "Primes that differ by 2 (e.g., 3 and 5)"
+        case .mersennePrime:
+            return "Primes of form 2^p-1"
+        case .safePrime:
+            return "Primes p where (p-1)/2 is also prime"
+        case .palindromicPrime:
+            return "Primes that read the same backward"
+        case .circularPrime:
+            return "All rotations of digits are prime"
+        case .sophieGermainPrime:
+            return "Primes p where 2p+1 is also prime"
+        case .factorialPrime:
+            return "Primes of form n!±1"
+        case .fibonacciPrime:
+            return "Primes that are also Fibonacci numbers"
+        case .sexyPrime:
+            return "Primes that differ by 6"
+        case .cubanPrime:
+            return "Primes of form (3m²+3m+1)"
+        case .happyPrime:
+            return "Primes that are also happy numbers"
+        case .chenPrime:
+            return "Primes p where p+2 is prime or semiprime"
+        case .wieferichPrime:
+            return "Primes p where 2^(p-1)≡1 (mod p²)"
+        case .isolatedPrime:
+            return "Primes with no primes at distance 2"
+        }
+    }
+}
+
+// MARK: - Color Codable Extensions
+extension Color {
+    // Encode and decode Color
+    init(rgbArray: [Int]) {
+        self.init(
+            .sRGB,
+            red: Double(rgbArray[0]) / 255.0,
+            green: Double(rgbArray[1]) / 255.0,
+            blue: Double(rgbArray[2]) / 255.0,
+            opacity: 1.0
+        )
+    }
+    
+    var rgbArray: [Int] {
+        let components = self.cgColor?.components ?? [0, 0, 0, 0]
+        return [
+            Int(components[0] * 255),
+            Int(components[1] * 255),
+            Int(components[2] * 255)
+        ]
+    }
+}
+
+extension Color: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rgbArray = try container.decode([Int].self)
+        self.init(rgbArray: rgbArray)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.rgbArray)
+    }
+}
+
+
+
+// MARK: - Prime Point Model
+struct PrimePoint {
+    let x: Int
+    let y: Int
+    let type: PrimeType
+}
+
+// MARK: - VisualizationStatistics Model
+struct VisualizationStatistics {
+    let width: Int
+    let height: Int
+    let gridColumns: Int
+    let gridRows: Int
+    let totalPositions: Int
+    let totalPrimes: Int
+    let density: Double
+    let primeTypes: [PrimeType: Int]
+    
+    var formattedDensity: String {
+        String(format: "%.2f%%", density)
+    }
+}
+```
+
+### File: PrimeVisualizer/Models/PrimeType.swift
+
+```swift
+//
+//  PrimeType.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+```
+
+### File: PrimeVisualizer/Preview Content/Preview Assets.xcassets/Contents.json
+
+```json
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+```
+
+### File: PrimeVisualizer/Base.lproj/PrimeVis.entitlements
+
+```entitlements
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+```
+
+### File: PrimeVisualizer/Extensions/ColorExtensions.swift
+
+```swift
+import SwiftUI
+
+extension Color {
+    /// Creates a lighter version of the color
+    /// - Parameter percentage: Percentage to lighten by (0-100)
+    /// - Returns: Lightened color
+    func lighter(by percentage: CGFloat = 30.0) -> Color {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        let factor = 1.0 + percentage / 100.0
+        
+        let r = min(components[0] * factor, 1.0)
+        let g = min(components[1] * factor, 1.0)
+        let b = min(components[2] * factor, 1.0)
+        
+        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
+    
+    /// Creates a darker version of the color
+    /// - Parameter percentage: Percentage to darken by (0-100)
+    /// - Returns: Darkened color
+    func darker(by percentage: CGFloat = 30.0) -> Color {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        let factor = 1.0 - percentage / 100.0
+        
+        let r = max(components[0] * factor, 0.0)
+        let g = max(components[1] * factor, 0.0)
+        let b = max(components[2] * factor, 0.0)
+        
+        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
+    
+    /// Returns a color with adjusted opacity
+    /// - Parameter alpha: New opacity value (0-1)
+    /// - Returns: Color with adjusted opacity
+    func withAlpha(_ alpha: CGFloat) -> Color {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        
+        return Color(.sRGB,
+                   red: components[0],
+                   green: components[1],
+                   blue: components[2],
+                   opacity: alpha)
+    }
+    
+    /// Determines if the color is light or dark
+    /// - Returns: True if the color is light
+    func isLight() -> Bool {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        
+        // Simplified luminance calculation
+        let luminance = 0.299 * components[0] + 0.587 * components[1] + 0.114 * components[2]
+        
+        return luminance > 0.5
+    }
+}
+```
+
+### File: PrimeVisualizer/Controllers/ConfigurationController.swift
+
+```swift
+import Foundation
+import SwiftUI
+
+class ConfigurationController: ObservableObject {
+    @Published var configuration: Configuration
+    
+    private let configFileName = "prime_visualizer_config.json"
+    private var configURL: URL {
+        let fileManager = FileManager.default
+        let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDirectoryURL = appSupportURL.appendingPathComponent("PrimeVisualizer", isDirectory: true)
+        
+        if !fileManager.fileExists(atPath: appDirectoryURL.path) {
+            try? fileManager.createDirectory(at: appDirectoryURL, withIntermediateDirectories: true)
+        }
+        
+        return appDirectoryURL.appendingPathComponent(configFileName)
+    }
+    
+    init() {
+        // Initialize with default configuration first
+        self.configuration = Configuration.default
+        
+        // Then try to load from file, if available
+        if let loadedConfig = try? loadConfiguration() {
+            self.configuration = loadedConfig
+        } else {
+            // Save the default configuration if no file exists
+            try? saveConfiguration()
+        }
+    }
+    
+    // MARK: - Public Methods
+    
+    /// Update grid settings
+    /// - Parameter gridSettings: New grid settings
+    func updateGridSettings(_ gridSettings: GridSettings) {
+        configuration.grid = gridSettings
+        objectWillChange.send()
+        try? saveConfiguration()
+    }
+    
+    /// Update a specific color for a prime type
+    /// - Parameters:
+    ///   - color: New color
+    ///   - primeType: Prime type to update
+    func updateColor(_ color: Color, for primeType: PrimeType) {
+        configuration.colors[primeType.rawValue] = color
+        objectWillChange.send()
+        try? saveConfiguration()
+    }
+    
+    /// Reset all settings to defaults
+    func resetToDefaults() {
+        configuration = Configuration.default
+        objectWillChange.send()
+        try? saveConfiguration()
+    }
+    
+    // MARK: - Private Methods
+    
+    /// Save configuration to file
+    /// - Throws: Error if saving fails
+    private func saveConfiguration() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        
+        let data = try encoder.encode(configuration)
+        try data.write(to: configURL)
+    }
+    
+    /// Load configuration from file
+    /// - Returns: Configuration object
+    /// - Throws: Error if loading fails
+    private func loadConfiguration() throws -> Configuration {
+        let data = try Data(contentsOf: configURL)
+        let decoder = JSONDecoder()
+        return try decoder.decode(Configuration.self, from: data)
+    }
+}
+```
+
+### File: PrimeVisualizer/Controllers/VisualizationController.swift
+
+```swift
+import Foundation
+import SwiftUI
+import Combine
+
+class VisualizationController: ObservableObject {
+    @Published var isGenerating = false
+    @Published var currentImage: NSImage?
+    @Published var statistics: VisualizationStatistics?
+    @Published var errorMessage: String?
+    @Published var zoomLevel: Double = 1.0
+    
+    private let configController: ConfigurationController
+    private var cancellables = Set<AnyCancellable>()
+    
+    init(configController: ConfigurationController) {
+        self.configController = configController
+    }
+    
+    // MARK: - Public Methods
+    
+    /// Generate a prime visualization based on current settings
+    func generateVisualization() {
+        guard !isGenerating else { return }
+        
+        isGenerating = true
+        errorMessage = nil
+        
+        // Get configuration settings
+        let config = configController.configuration
+        
+        // Create a background task for generation
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            do {
+                print("Starting visualization generation...")
+                // Generate the visualization
+                let stats = try ImageGenerator.generateVisualization(
+                    columns: config.grid.columns,
+                    rows: config.grid.rows,
+                    dotSize: config.grid.dotSize,
+                    spacing: config.grid.spacing,
+                    colors: config.colors,
+                    backgroundColor: config.grid.backgroundColor,
+                    outputPath: self.resolveOutputPath(config.application.defaultOutputFile)
+                )
+                
+                print("Generation completed, loading image...")
+                
+                // Load the generated image
+                let outputPath = self.resolveOutputPath(config.application.defaultOutputFile)
+                let image = NSImage(contentsOfFile: outputPath)
+                
+                // Update UI on main thread
+                DispatchQueue.main.async {
+                    if let image = image {
+                        self.currentImage = image
+                        self.statistics = stats
+                        // Start with zoom = 1, will be adjusted by autoFitImage
+                        self.zoomLevel = 1.0
+                    } else {
+                        self.errorMessage = "Failed to load the generated image"
+                    }
+                    self.isGenerating = false
+                }
+            } catch {
+                // Handle errors
+                print("Error generating visualization: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                    self.isGenerating = false
+                }
+            }
+        }
+    }
+    
+    /// Save the current image to a file
+    /// - Parameter path: Path to save the image
+    /// - Returns: True if successful, false otherwise
+    func saveImage(to path: String) -> Bool {
+        guard let image = currentImage else {
+            errorMessage = "No image to save"
+            return false
+        }
+        
+        let resolvedPath = resolveOutputPath(path)
+        
+        // Ensure directory exists
+        let directoryURL = URL(fileURLWithPath: resolvedPath).deletingLastPathComponent()
+        let fileManager = FileManager.default
+        
+        if !fileManager.fileExists(atPath: directoryURL.path) {
+            do {
+                try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            } catch {
+                errorMessage = "Failed to create directory: \(error.localizedDescription)"
+                return false
+            }
+        }
+        
+        // Convert to PNG data
+        guard let tiffData = image.tiffRepresentation,
+              let bitmapRep = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+            errorMessage = "Failed to convert image to PNG format"
+            return false
+        }
+        
+        // Write to file
+        do {
+            try pngData.write(to: URL(fileURLWithPath: resolvedPath))
+            return true
+        } catch {
+            errorMessage = "Failed to write image to file: \(error.localizedDescription)"
+            return false
+        }
+    }
+    
+    /// Apply zoom to the current image
+    /// - Parameter factor: Zoom factor
+    func zoom(by factor: Double) {
+        zoomLevel *= factor
+        
+        // Limit zoom range
+        zoomLevel = min(max(zoomLevel, 0.1), 5.0)
+    }
+    
+    /// Reset zoom to 100%
+    func resetZoom() {
+        zoomLevel = 1.0
+    }
+    
+    /// Resolves the output path, expanding ~ to home directory if needed
+    /// - Parameter path: Original path
+    /// - Returns: Resolved path
+    private func resolveOutputPath(_ path: String) -> String {
+        if path.starts(with: "~") {
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+            return path.replacingOccurrences(of: "~", with: homeDirectory)
+        }
+        
+        // If it's not an absolute path, save to Documents directory
+        if !path.starts(with: "/") {
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documentsURL.appendingPathComponent(path).path
+        }
+        
+        return path
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/AboutView.swift
+
+```swift
+import SwiftUI
+
+struct AboutView: View {
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "square.grid.3x3.fill")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 60, height: 60)
+                    .foregroundColor(.blue)
+                
+                Text("Prime Visualizer")
+                    .font(.title)
+                    .fontWeight(.bold)
+                
+                Text("Version 1.0.0")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Text("A tool for visualizing the distribution and patterns of prime numbers in a grid, with color-coding for different types of primes.")
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Text("Features:")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    FeatureRow(text: "Generate visual representations of prime numbers")
+                    FeatureRow(text: "Identify and color-code different types of primes")
+                    FeatureRow(text: "Customize grid size, colors, and display options")
+                    FeatureRow(text: "Save visualizations as PNG images")
+                }
+                .padding(.horizontal)
+                
+                Spacer(minLength: 20)
+                
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .padding(.bottom)
+            }
+            .padding()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct FeatureRow: View {
+    let text: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+            
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/ControlPanel.swift
+
+```swift
+import SwiftUI
+
+struct ControlPanel: View {
+    @ObservedObject var configController: ConfigurationController
+    @ObservedObject var visualizationController: VisualizationController
+    
+    @State private var selectedTab = 0
+    @State private var gridColumns: String
+    @State private var gridRows: String
+    @State private var dotSize: String
+    @State private var spacing: String
+    @State private var backgroundColor: Color
+    
+    init(configController: ConfigurationController, visualizationController: VisualizationController) {
+        self.configController = configController
+        self.visualizationController = visualizationController
+        
+        // Initialize state from current configuration
+        let grid = configController.configuration.grid
+        _gridColumns = State(initialValue: String(grid.columns))
+        _gridRows = State(initialValue: String(grid.rows))
+        _dotSize = State(initialValue: String(grid.dotSize))
+        _spacing = State(initialValue: String(grid.spacing))
+        _backgroundColor = State(initialValue: grid.backgroundColor)
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Tabs for settings and statistics
+            Picker("", selection: $selectedTab) {
+                Text("Settings").tag(0)
+                Text("Statistics").tag(1)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .padding()
+            
+            if selectedTab == 0 {
+                settingsView
+            } else {
+                statisticsView
+            }
+            
+            Spacer()
+            
+            // Generate button
+            Button(action: {
+                // Update configuration
+                updateConfiguration()
+                
+                // Generate visualization
+                visualizationController.generateVisualization()
+            }) {
+                if visualizationController.isGenerating {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle())
+                        .scaleEffect(0.8)
+                    Text("Generating...")
+                        .padding(.leading, 4)
+                } else {
+                    Text("Generate Visualization")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(visualizationController.isGenerating)
+            .padding()
+        }
+    }
+    
+    // MARK: - Views
+    
+    // Settings view
+    private var settingsView: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // Grid settings
+                GroupBox(label: Text("Grid Settings").font(.headline)) {
+                    VStack(spacing: 12) {
+                        numericField(label: "Columns:", value: $gridColumns, range: 1...100000)
+                        numericField(label: "Rows:", value: $gridRows, range: 1...100000)
+                        numericField(label: "Dot Size:", value: $dotSize, range: 1...50)
+                        numericField(label: "Spacing:", value: $spacing, range: 0...20)
+                        ColorPicker("Background Color:", selection: $backgroundColor)
+                            .padding(.vertical, 4)
+                    }
+                    .padding(8)
+                }
+                
+                // Prime colors
+                GroupBox(label: Text("Prime Colors").font(.headline)) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(PrimeType.allCases) { primeType in
+                                colorPickerRow(for: primeType)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .frame(maxHeight: 300)
+                }
+                
+                Button("Reset to Defaults") {
+                    configController.resetToDefaults()
+                    
+                    // Update local state
+                    let grid = configController.configuration.grid
+                    gridColumns = String(grid.columns)
+                    gridRows = String(grid.rows)
+                    dotSize = String(grid.dotSize)
+                    spacing = String(grid.spacing)
+                    backgroundColor = grid.backgroundColor
+                }
+                .foregroundColor(.red)
+                .padding(.top, 8)
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: - Statistics view
+    private var statisticsView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if let stats = visualizationController.statistics {
+                    Group {
+                        StatRow(label: "Grid Size:", value: "\(stats.gridColumns)×\(stats.gridRows)")
+                        StatRow(label: "Image Size:", value: "\(stats.width)×\(stats.height) pixels")
+                        StatRow(label: "Total Positions:", value: "\(stats.totalPositions)")
+                        StatRow(label: "Total Primes:", value: "\(stats.totalPrimes)")
+                        StatRow(label: "Prime Density:", value: stats.formattedDensity)
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    Text("Prime Types:")
+                        .font(.headline)
+                        .padding(.bottom, 4)
+                    
+                    // Sort prime types by count, descending
+                    let sortedTypes = stats.primeTypes.sorted { $0.value > $1.value }
+                    
+                    ForEach(sortedTypes, id: \.key) { primeType, count in
+                        let percentage = Double(count) / Double(stats.totalPrimes) * 100
+                        
+                        HStack {
+                            Rectangle()
+                                .fill(configController.configuration.colors[primeType.rawValue] ?? .black)
+                                .frame(width: 12, height: 12)
+                            
+                            Text(primeType.displayName)
+                                .font(.subheadline)
+                            
+                            Spacer()
+                            
+                            Text("\(count) (\(String(format: "%.1f%%", percentage)))")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } else {
+                    Text("No visualization generated yet")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding()
+                }
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: - Helper Views
+    
+    private func numericField(label: String, value: Binding<String>, range: ClosedRange<Int>) -> some View {
+        HStack {
+            Text(label)
+                .frame(width: 100, alignment: .leading)
+            
+            TextField("", text: value)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(maxWidth: .infinity)
+                .onChange(of: value.wrappedValue) { oldValue, newValue in
+                    let filtered = newValue.filter { "0123456789".contains($0) }
+                    if filtered != newValue {
+                        value.wrappedValue = filtered
+                    }
+                    
+                    if let num = Int(filtered), !range.contains(num) {
+                        if num < range.lowerBound {
+                            value.wrappedValue = String(range.lowerBound)
+                        } else if num > range.upperBound {
+                            value.wrappedValue = String(range.upperBound)
+                        }
+                    }
+                }
+            
+            Stepper("", onIncrement: {
+                if let num = Int(value.wrappedValue), num < range.upperBound {
+                    value.wrappedValue = String(num + 1)
+                } else {
+                    value.wrappedValue = String(range.lowerBound)
+                }
+            }, onDecrement: {
+                if let num = Int(value.wrappedValue), num > range.lowerBound {
+                    value.wrappedValue = String(num - 1)
+                } else {
+                    value.wrappedValue = String(range.upperBound)
+                }
+            })
+            .labelsHidden()
+        }
+    }
+    
+    private func colorPickerRow(for primeType: PrimeType) -> some View {
+        HStack {
+            Text(primeType.displayName)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            ColorPicker("", selection: Binding(
+                get: { configController.configuration.colors[primeType.rawValue] ?? .black },
+                set: { configController.updateColor($0, for: primeType) }
+            ))
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func updateConfiguration() {
+        let columns = Int(gridColumns) ?? configController.configuration.grid.columns
+        let rows = Int(gridRows) ?? configController.configuration.grid.rows
+        let dotSize = Int(dotSize) ?? configController.configuration.grid.dotSize
+        let spacing = Int(spacing) ?? configController.configuration.grid.spacing
+        
+        let newGridSettings = GridSettings(
+            columns: columns,
+            rows: rows,
+            dotSize: dotSize,
+            spacing: spacing,
+            backgroundColor: backgroundColor
+        )
+        
+        configController.updateGridSettings(newGridSettings)
+    }
+}
+
+// MARK: - StatRow View
+struct StatRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline)
+                .fontWeight(.medium)
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/LegendView.swift
+
+```swift
+import SwiftUI
+
+struct LegendView: View {
+    let colors: [String: Color]
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(PrimeType.allCases) { primeType in
+                    legendRow(for: primeType)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private func legendRow(for primeType: PrimeType) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Rectangle()
+                    .fill(colors[primeType.rawValue] ?? .black)
+                    .frame(width: 20, height: 20)
+                    .cornerRadius(4)
+                
+                Text(primeType.displayName)
+                    .font(.headline)
+            }
+            
+            Text(primeType.description)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 28)
+        }
+        .padding(.vertical, 4)
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/MainView.swift
+
+```swift
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct MainView: View {
+    @StateObject private var configController = ConfigurationController()
+    @StateObject private var visualizationController: VisualizationController
+    
+    @State private var isShowingLegend = false
+    @State private var isShowingAbout = false
+    @State private var isShowingSaveDialog = false
+    
+    init() {
+        let config = ConfigurationController()
+        _configController = StateObject(wrappedValue: config)
+        _visualizationController = StateObject(wrappedValue: VisualizationController(configController: config))
+    }
+    
+    var body: some View {
+        NavigationSplitView {
+            ControlPanel(
+                configController: configController,
+                visualizationController: visualizationController
+            )
+            .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
+        } detail: {
+            VisualizationView(controller: visualizationController)
+                .frame(minWidth: 500, minHeight: 400)
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    visualizationController.generateVisualization()
+                }) {
+                    Label("Generate", systemImage: "wand.and.stars")
+                }
+                .disabled(visualizationController.isGenerating)
+                .help("Generate visualization")
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    isShowingSaveDialog = true
+                }) {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .disabled(visualizationController.currentImage == nil || visualizationController.isGenerating)
+                .help("Save visualization as image")
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    isShowingLegend = true
+                }) {
+                    Label("Legend", systemImage: "info.circle")
+                }
+                .help("Show legend")
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    isShowingAbout = true
+                }) {
+                    Label("About", systemImage: "questionmark.circle")
+                }
+                .help("About Prime Visualizer")
+            }
+        }
+        .navigationTitle("Prime Visualizer")
+        .sheet(isPresented: $isShowingLegend) {
+            NavigationStack {
+                LegendView(colors: configController.configuration.colors)
+                    .navigationTitle("Prime Types Legend")
+                    // navigationBarTitleDisplayMode not available in macOS
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isShowingLegend = false
+                            }
+                        }
+                    }
+                    .frame(minWidth: 600, minHeight: 500)
+            }
+        }
+        .sheet(isPresented: $isShowingAbout) {
+            NavigationStack {
+                AboutView()
+                    .navigationTitle("About")
+                    // navigationBarTitleDisplayMode not available in macOS
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isShowingAbout = false
+                            }
+                        }
+                    }
+                    .frame(width: 400, height: 450)
+            }
+        }
+        .fileExporter(
+            isPresented: $isShowingSaveDialog,
+            document: ImageDocument(image: visualizationController.currentImage),
+            contentType: .png,
+            defaultFilename: "prime_visualization"
+        ) { result in
+            if case .success(let url) = result {
+                print("Image saved to \(url.path)")
+            }
+        }
+        .alert(
+            "Error",
+            isPresented: Binding<Bool>(
+                get: { visualizationController.errorMessage != nil },
+                set: { if !$0 { visualizationController.errorMessage = nil } }
+            ),
+            presenting: visualizationController.errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { errorMessage in
+            Text(errorMessage)
+        }
+    }
+}
+
+// MARK: - ImageDocument for file export
+struct ImageDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.png] }
+    
+    var image: NSImage?
+    
+    init(image: NSImage?) {
+        self.image = image
+    }
+    
+    init(configuration: ReadConfiguration) throws {
+        if let data = configuration.file.regularFileContents,
+           let nsImage = NSImage(data: data) {
+            image = nsImage
+        } else {
+            image = nil
+        }
+    }
+    
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let data: Data
+        
+        if let image = image, let tiffData = image.tiffRepresentation,
+           let bitmapRep = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+            data = pngData
+        } else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        
+        return .init(regularFileWithContents: data)
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/StatisticsView.swift
+
+```swift
+//
+//  StatisticsView.swift
+//  PrimeVis
+//
+//  Created by Johan Karlsson on 2025-03-29.
+//
+
+```
+
+### File: PrimeVisualizer/Views/VisualizationView.swift
+
+```swift
+import SwiftUI
+
+struct VisualizationView: View {
+    @ObservedObject var controller: VisualizationController
+    @State private var frameSize: CGSize = .zero
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                if let image = controller.currentImage {
+                    ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                        ZStack {
+                            Color(.windowBackgroundColor)
+                                .frame(width: max(geometry.size.width, image.size.width * controller.zoomLevel),
+                                       height: max(geometry.size.height, image.size.height * controller.zoomLevel))
+                            
+                            imageView(image)
+                                .scaleEffect(controller.zoomLevel)
+                        }
+                    }
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                controller.zoomLevel = value
+                            }
+                    )
+                    .onAppear {
+                        // Auto-fit the image when it first appears
+                        autoFitImage(image, in: geometry.size)
+                    }
+                    .onChange(of: geometry.size) { newSize in
+                        // Adjust zoom when window size changes
+                        autoFitImage(image, in: newSize)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        zoomControls
+                            .padding(8)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Button(action: {
+                            autoFitImage(image, in: geometry.size)
+                        }) {
+                            Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+                                .padding(4)
+                        }
+                        .buttonStyle(.borderless)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(6)
+                        .padding(8)
+                        .help("Fit to window")
+                    }
+                } else {
+                    placeholderView
+                }
+            }
+            .background(Color(.windowBackgroundColor))
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+    
+    // MARK: - Subviews
+    
+    private func imageView(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.none) // Maintains pixel-perfect rendering
+            .aspectRatio(contentMode: .fit)
+            .background(Color.white)
+            .border(Color.gray.opacity(0.3), width: 1)
+            .shadow(radius: 3)
+    }
+    
+    private var placeholderView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "square.grid.3x3.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .foregroundColor(.secondary)
+                .opacity(0.5)
+            
+            Text("No visualization generated")
+                .font(.title2)
+                .foregroundColor(.secondary)
+            
+            Text("Use the controls on the left panel to configure and generate a visualization.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+            
+            Button("Generate Visualization") {
+                controller.generateVisualization()
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var zoomControls: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                controller.zoom(by: 0.8)
+            }) {
+                Image(systemName: "minus.magnifyingglass")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Zoom out")
+            
+            Button(action: {
+                controller.resetZoom()
+            }) {
+                Text("\(Int(controller.zoomLevel * 100))%")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .frame(minWidth: 44)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Reset zoom")
+            
+            Button(action: {
+                controller.zoom(by: 1.25)
+            }) {
+                Image(systemName: "plus.magnifyingglass")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Zoom in")
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// Automatically fits the image to the available space
+    private func autoFitImage(_ image: NSImage, in size: CGSize) {
+        let widthRatio = size.width / image.size.width
+        let heightRatio = size.height / image.size.height
+        
+        // Use the smaller ratio to ensure the entire image fits
+        let fitZoom = min(widthRatio, heightRatio) * 0.95 // 5% margin
+        
+        // Don't zoom too much in either direction
+        let clampedZoom = min(max(fitZoom, 0.1), 2.0)
+        
+        controller.zoomLevel = clampedZoom
+    }
+}
+```
+
+### File: Base.lproj/PrimeVis.entitlements
+
+```entitlements
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+```
+
+## Collection Summary
+
+- Total files scanned: 34
+- Files included: 28
+- Files skipped (size): 0
+- Files with errors: 0
+- Total size of included files: 0.07MB

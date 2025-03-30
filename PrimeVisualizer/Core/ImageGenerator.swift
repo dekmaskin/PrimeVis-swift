@@ -49,7 +49,7 @@ class ImageGenerator {
         // For each position in the grid, check if it's prime
         var primePoints: [PrimePoint] = []
         
-        for pos in 0..<totalPositions {
+        for pos in 1..<totalPositions {  // Start from 1, not 0
             // Convert position to 2D coordinates
             let x = pos % columns
             let y = pos / columns
@@ -82,51 +82,84 @@ class ImageGenerator {
         backgroundColor: Color,
         outputPath: String
     ) throws -> VisualizationStatistics {
+        // Use default values if invalid parameters are provided
+        let safeColumns = max(10, columns)
+        let safeRows = max(10, rows)
+        let safeDotSize = max(1, dotSize)
+        let safeSpacing = max(0, spacing)
+        
         // Calculate dimensions
         let (width, height, totalPositions) = calculateDimensions(
-            columns: columns,
-            rows: rows,
-            dotSize: dotSize,
-            spacing: spacing
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing
         )
+        
+        print("Generating visualization with dimensions: \(width)×\(height), totalPositions: \(totalPositions)")
         
         // Generate prime positions
         let primePoints = createPrimeGrid(
             totalPositions: totalPositions,
-            columns: columns,
-            rows: rows
+            columns: safeColumns,
+            rows: safeRows
         )
+        
+        print("Generated \(primePoints.count) prime points")
+        
+        // Ensure we have a valid path
+        let resolvedPath = resolveOutputPath(outputPath)
+        print("Saving to path: \(resolvedPath)")
         
         // Draw the visualization
         guard let image = drawVisualization(
             primePoints: primePoints,
-            columns: columns,
-            rows: rows,
-            dotSize: dotSize,
-            spacing: spacing,
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing,
             colors: colors,
             backgroundColor: backgroundColor,
             width: width,
             height: height
         ) else {
+            print("Failed to draw visualization")
             throw VisualizationError.imageGenerationFailed
         }
         
         // Save the image
-        try saveImage(image, to: outputPath)
-        print("Image saved to \(outputPath)")
+        try saveImage(image, to: resolvedPath)
+        print("Image saved to \(resolvedPath)")
         
         // Generate and return statistics
         return generateStatistics(
             primePoints: primePoints,
-            columns: columns,
-            rows: rows,
-            dotSize: dotSize,
-            spacing: spacing,
+            columns: safeColumns,
+            rows: safeRows,
+            dotSize: safeDotSize,
+            spacing: safeSpacing,
             width: width,
             height: height,
             totalPositions: totalPositions
         )
+    }
+    
+    /// Resolves the output path, expanding ~ to home directory if needed
+    /// - Parameter path: Original path
+    /// - Returns: Resolved path
+    private static func resolveOutputPath(_ path: String) -> String {
+        if path.starts(with: "~") {
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+            return path.replacingOccurrences(of: "~", with: homeDirectory)
+        }
+        
+        // If it's not an absolute path, save to Documents directory
+        if !path.starts(with: "/") {
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documentsURL.appendingPathComponent(path).path
+        }
+        
+        return path
     }
     
     /// Draw the prime visualization to an image
@@ -156,10 +189,14 @@ class ImageGenerator {
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         
+        // Ensure width and height are valid
+        let safeWidth = max(1, width)
+        let safeHeight = max(1, height)
+        
         guard let context = CGContext(
             data: nil,
-            width: width,
-            height: height,
+            width: safeWidth,
+            height: safeHeight,
             bitsPerComponent: 8,
             bytesPerRow: 0,
             space: colorSpace,
@@ -170,27 +207,30 @@ class ImageGenerator {
         }
         
         // Set background color
-        let bgComponents = backgroundColor.cgColor?.components ?? [1, 1, 1, 1]
-        context.setFillColor(red: bgComponents[0], green: bgComponents[1], blue: bgComponents[2], alpha: 1.0)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let bgNSColor = NSColor(backgroundColor)
+        context.setFillColor(bgNSColor.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: safeWidth, height: safeHeight))
         
         // Draw dots
         for point in primePoints {
             // Get color for this prime type
             let colorKey = point.type.rawValue
             let color = colors[colorKey] ?? .black
-            let components = color.cgColor?.components ?? [0, 0, 0, 1]
+            let nsColor = NSColor(color)
             
-            context.setFillColor(red: components[0], green: components[1], blue: components[2], alpha: 1.0)
+            context.setFillColor(nsColor.cgColor)
             
             // Calculate position
             let x = point.x * (dotSize + spacing)
             // Flip y-coordinate to match traditional coordinate system
-            let y = height - (point.y * (dotSize + spacing)) - dotSize
+            let y = safeHeight - (point.y * (dotSize + spacing)) - dotSize
             
-            // Draw circle
-            let rect = CGRect(x: x, y: y, width: dotSize, height: dotSize)
-            context.fillEllipse(in: rect)
+            // Ensure the coordinates are within bounds
+            if x >= 0 && x < safeWidth && y >= 0 && y < safeHeight {
+                // Draw circle
+                let rect = CGRect(x: x, y: y, width: dotSize, height: dotSize)
+                context.fillEllipse(in: rect)
+            }
         }
         
         // Return the CGImage
@@ -211,6 +251,7 @@ class ImageGenerator {
             do {
                 try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             } catch {
+                print("Failed to create directory: \(error.localizedDescription)")
                 throw VisualizationError.directoryCreationFailed
             }
         }
@@ -222,6 +263,7 @@ class ImageGenerator {
         guard let imageData = nsImage.tiffRepresentation,
               let bitmapRep = NSBitmapImageRep(data: imageData),
               let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+            print("Failed to create PNG data")
             throw VisualizationError.imageWriteFailed
         }
         
@@ -229,6 +271,7 @@ class ImageGenerator {
         do {
             try pngData.write(to: URL(fileURLWithPath: path))
         } catch {
+            print("Failed to write image to file: \(error.localizedDescription)")
             throw VisualizationError.imageWriteFailed
         }
     }

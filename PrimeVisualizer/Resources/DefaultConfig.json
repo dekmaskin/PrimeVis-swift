@@ -1,0 +1,31 @@
+{
+  "grid": {
+    "columns": 100,
+    "rows": 100,
+    "dot_size": 8,
+    "spacing": 2,
+    "background_color": [255, 255, 255]
+  },
+  "colors": {
+    "regular_prime": [0, 0, 0],
+    "twin_prime": [255, 0, 0],
+    "mersenne_prime": [0, 255, 0],
+    "safe_prime": [0, 0, 255],
+    "palindromic_prime": [255, 165, 0],
+    "circular_prime": [128, 0, 128],
+    "sophie_germain_prime": [255, 192, 203],
+    "factorial_prime": [165, 42, 42],
+    "fibonacci_prime": [255, 215, 0],
+    "sexy_prime": [255, 20, 147],
+    "cuban_prime": [0, 255, 255],
+    "happy_prime": [124, 252, 0],
+    "chen_prime": [70, 130, 180],
+    "wieferich_prime": [255, 140, 0],
+    "isolated_prime": [128, 128, 128]
+  },
+  "application": {
+    "default_output_file": "~/Documents/prime_visualization.png",
+    "enable_statistics": true,
+    "save_config_on_exit": true
+  }
+}
