@@ -1,11 +1,3 @@
-//
-//  NumberDetailPanel.swift
-//  PrimeVis
-//
-//  Created by Johan Karlsson on 2025-03-30.
-//
-
-
 import SwiftUI
 
 struct NumberDetailPanel: View {

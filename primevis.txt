@@ -1,5 +1,5 @@
 # Source Code Collection
-# Generated: 2025-03-30 10:08:26
+# Generated: 2025-03-30 16:45:39
 # Root Path: /Users/johan/Documents/Code/PrimeVisu/PrimeVis
 # Included Extensions: .swift, .json, .entitlements
 # Excluded Directories: venv, __pycache__, .git, node_modules, dist, build, logs
@@ -8,6 +8,7 @@
 
 ```
 PrimeVis/
+  README.md
   grab_source.py
   primevis.txt
 PrimeVis.xcodeproj/
@@ -21,7 +22,9 @@ PrimeVis.xcodeproj/
     xcuserdata/
       johan.xcuserdatad/
         UserInterfaceState.xcuserstate
+        WorkspaceSettings.xcsettings
     xcshareddata/
+      WorkspaceSettings.xcsettings
       swiftpm/
         configuration/
 PrimeVisualizerTests/
@@ -58,14 +61,24 @@ PrimeVisualizer/
     ColorExtensions.swift
   Controllers/
     ConfigurationController.swift
+    ImageDocumentHandler.swift
     VisualizationController.swift
   Views/
     AboutView.swift
     ControlPanel.swift
+    InteractiveVisualizationView.swift
     LegendView.swift
     MainView.swift
     StatisticsView.swift
     VisualizationView.swift
+    Components/
+      NavigationControls.swift
+      NumberCell.swift
+      NumberDetailPanel.swift
+      NumberTheoryInfo.swift
+      OverlayControls.swift
+      PrimeNumbersGrid.swift
+      PrimeTypeSpecificInfo.swift
 Base.lproj/
   PrimeVis.entitlements
 ```
@@ -500,7 +513,7 @@ class ImageGenerator {
     ///   - height: Image height
     ///   - totalPositions: Total positions in the grid
     /// - Returns: VisualizationStatistics object
-    private static func generateStatistics(
+    static func generateStatistics(
         primePoints: [PrimePoint],
         columns: Int,
         rows: Int,
@@ -1428,6 +1441,20 @@ extension Color {
         return luminance > 0.5
     }
 }
+
+// MARK: - NSColor Extension
+extension NSColor {
+    /// Create NSColor from SwiftUI Color
+    convenience init(_ color: Color) {
+        let components = color.cgColor?.components ?? [0, 0, 0, 1]
+        self.init(
+            srgbRed: components[0],
+            green: components[1],
+            blue: components[2],
+            alpha: components.count > 3 ? components[3] : 1.0
+        )
+    }
+}
 ```
 
 ### File: PrimeVisualizer/Controllers/ConfigurationController.swift
@@ -1515,12 +1542,64 @@ class ConfigurationController: ObservableObject {
 }
 ```
 
+### File: PrimeVisualizer/Controllers/ImageDocumentHandler.swift
+
+```swift
+import SwiftUI
+import UniformTypeIdentifiers
+import AppKit
+
+// This class handles image document operations
+class ImageDocumentHandler: ObservableObject {
+    @Published var isExporting = false
+    
+    func saveImage(_ image: NSImage?, filename: String, completion: @escaping (Result<URL, Error>) -> Void) {
+        guard let image = image else {
+            completion(.failure(CocoaError(.fileNoSuchFile)))
+            return
+        }
+        
+        // Use NSOpenPanel which doesn't require Sendable conformance
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = filename
+        
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                self.exportImage(image, to: url, completion: completion)
+            } else {
+                completion(.failure(CocoaError(.userCancelled)))
+            }
+        }
+    }
+    
+    private func exportImage(_ image: NSImage, to url: URL, completion: @escaping (Result<URL, Error>) -> Void) {
+        // Convert to PNG data
+        guard let tiffData = image.tiffRepresentation,
+              let bitmapRep = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+            completion(.failure(CocoaError(.fileWriteUnknown)))
+            return
+        }
+        
+        // Write to file
+        do {
+            try pngData.write(to: url)
+            completion(.success(url))
+        } catch {
+            completion(.failure(error))
+        }
+    }
+}
+```
+
 ### File: PrimeVisualizer/Controllers/VisualizationController.swift
 
 ```swift
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 
 class VisualizationController: ObservableObject {
     @Published var isGenerating = false
@@ -1528,12 +1607,37 @@ class VisualizationController: ObservableObject {
     @Published var statistics: VisualizationStatistics?
     @Published var errorMessage: String?
     @Published var zoomLevel: Double = 1.0
+    @Published var visualizationMode: VisualizationMode = .interactive
+    @Published var selectedNumber: Int? = nil
+    
+    // For interactive mode
+    @Published var primePoints: [PrimePoint] = []
+    @Published var gridColumns: Int = 100
+    @Published var gridRows: Int = 100
     
     private let configController: ConfigurationController
     private var cancellables = Set<AnyCancellable>()
     
     init(configController: ConfigurationController) {
         self.configController = configController
+        
+        // Update grid settings when configuration changes
+        configController.$configuration
+            .sink { [weak self] config in
+                self?.gridColumns = config.grid.columns
+                self?.gridRows = config.grid.rows
+            }
+            .store(in: &cancellables)
+            
+        // Generate visualization on initialization after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.generateVisualization()
+        }
+    }
+    
+    enum VisualizationMode {
+        case interactive
+        case image
     }
     
     // MARK: - Public Methods
@@ -1544,6 +1648,7 @@ class VisualizationController: ObservableObject {
         
         isGenerating = true
         errorMessage = nil
+        selectedNumber = nil
         
         // Get configuration settings
         let config = configController.configuration
@@ -1554,34 +1659,69 @@ class VisualizationController: ObservableObject {
             
             do {
                 print("Starting visualization generation...")
-                // Generate the visualization
-                let stats = try ImageGenerator.generateVisualization(
+                
+                // Calculate dimensions
+                let (width, height, totalPositions) = ImageGenerator.calculateDimensions(
+                    columns: config.grid.columns,
+                    rows: config.grid.rows,
+                    dotSize: config.grid.dotSize,
+                    spacing: config.grid.spacing
+                )
+                
+                // Generate prime points
+                let primePoints = ImageGenerator.createPrimeGrid(
+                    totalPositions: totalPositions,
+                    columns: config.grid.columns,
+                    rows: config.grid.rows
+                )
+                
+                // Generate statistics
+                let stats = ImageGenerator.generateStatistics(
+                    primePoints: primePoints,
                     columns: config.grid.columns,
                     rows: config.grid.rows,
                     dotSize: config.grid.dotSize,
                     spacing: config.grid.spacing,
-                    colors: config.colors,
-                    backgroundColor: config.grid.backgroundColor,
-                    outputPath: self.resolveOutputPath(config.application.defaultOutputFile)
+                    width: width,
+                    height: height,
+                    totalPositions: totalPositions
                 )
                 
-                print("Generation completed, loading image...")
-                
-                // Load the generated image
-                let outputPath = self.resolveOutputPath(config.application.defaultOutputFile)
-                let image = NSImage(contentsOfFile: outputPath)
-                
-                // Update UI on main thread
-                DispatchQueue.main.async {
-                    if let image = image {
-                        self.currentImage = image
-                        self.statistics = stats
-                        // Start with zoom = 1, will be adjusted by autoFitImage
-                        self.zoomLevel = 1.0
-                    } else {
-                        self.errorMessage = "Failed to load the generated image"
+                if self.visualizationMode == .image {
+                    // Generate the image using existing code
+                    let stats = try ImageGenerator.generateVisualization(
+                        columns: config.grid.columns,
+                        rows: config.grid.rows,
+                        dotSize: config.grid.dotSize,
+                        spacing: config.grid.spacing,
+                        colors: config.colors,
+                        backgroundColor: config.grid.backgroundColor,
+                        outputPath: self.resolveOutputPath(config.application.defaultOutputFile)
+                    )
+                    
+                    // Load the generated image
+                    let outputPath = self.resolveOutputPath(config.application.defaultOutputFile)
+                    let image = NSImage(contentsOfFile: outputPath)
+                    
+                    // Update UI on main thread
+                    DispatchQueue.main.async {
+                        if let image = image {
+                            self.currentImage = image
+                            self.statistics = stats
+                            self.zoomLevel = 1.0
+                            self.primePoints = primePoints
+                        } else {
+                            self.errorMessage = "Failed to load the generated image"
+                        }
+                        self.isGenerating = false
                     }
-                    self.isGenerating = false
+                } else {
+                    // For interactive mode, just update the prime points
+                    DispatchQueue.main.async {
+                        self.statistics = stats
+                        self.primePoints = primePoints
+                        self.isGenerating = false
+                    }
                 }
             } catch {
                 // Handle errors
@@ -1594,15 +1734,89 @@ class VisualizationController: ObservableObject {
         }
     }
     
-    /// Save the current image to a file
-    /// - Parameter path: Path to save the image
-    /// - Returns: True if successful, false otherwise
-    func saveImage(to path: String) -> Bool {
-        guard let image = currentImage else {
-            errorMessage = "No image to save"
-            return false
+    /// Generate an image from the current interactive visualization
+    func generateImageFromInteractive(completion: @escaping (Bool) -> Void) {
+        guard !isGenerating else {
+            completion(false)
+            return
         }
         
+        isGenerating = true
+        
+        // Get configuration settings
+        let config = configController.configuration
+        let outputPath = resolveOutputPath(config.application.defaultOutputFile)
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async {
+                    self?.isGenerating = false
+                    completion(false)
+                }
+                return
+            }
+            
+            do {
+                // Generate the image using existing code
+                _ = try ImageGenerator.generateVisualization(
+                    columns: config.grid.columns,
+                    rows: config.grid.rows,
+                    dotSize: config.grid.dotSize,
+                    spacing: config.grid.spacing,
+                    colors: config.colors,
+                    backgroundColor: config.grid.backgroundColor,
+                    outputPath: outputPath
+                )
+                
+                // Load the generated image
+                let image = NSImage(contentsOfFile: outputPath)
+                
+                // Update UI on main thread
+                DispatchQueue.main.async {
+                    if let image = image {
+                        self.currentImage = image
+                    }
+                    self.isGenerating = false
+                    completion(true)
+                }
+            } catch {
+                print("Error generating image: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                    self.isGenerating = false
+                    completion(false)
+                }
+            }
+        }
+    }
+    
+    /// Generate and save an image from the current view
+    func saveCurrentViewAsImage(to path: String, completion: @escaping (Bool) -> Void) {
+        // If we already have an image and are in image mode, just save it
+        if visualizationMode == .image, let currentImage = currentImage {
+            let success = saveImage(currentImage, to: path)
+            completion(success)
+            return
+        }
+        
+        // Otherwise, we need to generate an image from the interactive view
+        generateImageFromInteractive { [weak self] success in
+            guard let self = self, success, let image = self.currentImage else {
+                completion(false)
+                return
+            }
+            
+            let saveSuccess = self.saveImage(image, to: path)
+            completion(saveSuccess)
+        }
+    }
+    
+    /// Save an image to a file
+    /// - Parameters:
+    ///   - image: The image to save
+    ///   - path: Path to save the image
+    /// - Returns: True if successful, false otherwise
+    func saveImage(_ image: NSImage, to path: String) -> Bool {
         let resolvedPath = resolveOutputPath(path)
         
         // Ensure directory exists
@@ -1636,7 +1850,30 @@ class VisualizationController: ObservableObject {
         }
     }
     
-    /// Apply zoom to the current image
+    /// Switch between interactive and image modes
+    func toggleVisualizationMode() {
+        if visualizationMode == .interactive {
+            visualizationMode = .image
+            // Generate image if needed
+            if currentImage == nil {
+                generateImageFromInteractive { _ in }
+            }
+        } else {
+            visualizationMode = .interactive
+        }
+    }
+    
+    /// Get prime type for a number
+    func getPrimeTypeForNumber(_ number: Int) -> PrimeType? {
+        guard PrimeGenerator.isPrime(number) else { return nil }
+        
+        return PrimeClassifier.classifyPrime(
+            number,
+            primesSet: PrimeGenerator.generatePrimesSet(upTo: number + 10)
+        )
+    }
+    
+    /// Apply zoom to the current view
     /// - Parameter factor: Zoom factor
     func zoom(by factor: Double) {
         zoomLevel *= factor
@@ -1757,6 +1994,7 @@ struct ControlPanel: View {
     @State private var dotSize: String
     @State private var spacing: String
     @State private var backgroundColor: Color
+    @State private var exportProgress: Bool = false
     
     init(configController: ConfigurationController, visualizationController: VisualizationController) {
         self.configController = configController
@@ -1777,39 +2015,83 @@ struct ControlPanel: View {
             Picker("", selection: $selectedTab) {
                 Text("Settings").tag(0)
                 Text("Statistics").tag(1)
+                if visualizationController.selectedNumber != nil {
+                    Text("Details").tag(2)
+                }
             }
             .pickerStyle(SegmentedPickerStyle())
             .padding()
+            .onChange(of: visualizationController.selectedNumber) { oldValue, newValue in
+                // Switch to details tab when a number is selected
+                if newValue != nil && oldValue == nil {
+                    selectedTab = 2
+                }
+                // Switch back to previous tab if number selection is cleared
+                if newValue == nil && oldValue != nil && selectedTab == 2 {
+                    selectedTab = 0
+                }
+            }
             
             if selectedTab == 0 {
                 settingsView
-            } else {
+            } else if selectedTab == 1 {
                 statisticsView
+            } else if selectedTab == 2, let selectedNumber = visualizationController.selectedNumber {
+                numberDetailsView(selectedNumber)
             }
             
             Spacer()
             
-            // Generate button
-            Button(action: {
-                // Update configuration
-                updateConfiguration()
+            // Action buttons
+            VStack(spacing: 8) {
+                // Generate button
+                Button(action: {
+                    // Update configuration
+                    updateConfiguration()
+                    
+                    // Generate visualization
+                    visualizationController.generateVisualization()
+                }) {
+                    if visualizationController.isGenerating {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                        Text("Generating...")
+                            .padding(.leading, 4)
+                    } else {
+                        Text("Generate Visualization")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(visualizationController.isGenerating)
+                .padding(.horizontal)
                 
-                // Generate visualization
-                visualizationController.generateVisualization()
-            }) {
-                if visualizationController.isGenerating {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle())
-                        .scaleEffect(0.8)
-                    Text("Generating...")
-                        .padding(.leading, 4)
-                } else {
-                    Text("Generate Visualization")
+                // Export button for interactive mode
+                if visualizationController.visualizationMode == .interactive {
+                    Button(action: {
+                        exportProgress = true
+                        visualizationController.generateImageFromInteractive { success in
+                            exportProgress = false
+                        }
+                    }) {
+                        if exportProgress {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(0.8)
+                            Text("Exporting...")
+                                .padding(.leading, 4)
+                        } else {
+                            Text("Export as Image")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(visualizationController.isGenerating || visualizationController.primePoints.isEmpty || exportProgress)
+                    .padding(.horizontal)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(visualizationController.isGenerating)
-            .padding()
+            .padding(.bottom)
         }
     }
     
@@ -1843,6 +2125,26 @@ struct ControlPanel: View {
                         .padding(8)
                     }
                     .frame(maxHeight: 300)
+                }
+                
+                // Mode description
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Current Mode:")
+                            .font(.subheadline)
+                            .fontWeight(.bold)
+                        
+                        Text(visualizationController.visualizationMode == .interactive ?
+                             "Interactive: Click on numbers to view details" :
+                             "Image: View the visualization as a static image")
+                            .font(.caption)
+                        
+                        Text("Switch modes using the toolbar button above")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 
                 Button("Reset to Defaults") {
@@ -1910,6 +2212,139 @@ struct ControlPanel: View {
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding()
+                }
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: - Number Details View
+    private func numberDetailsView(_ number: Int) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Basic number info
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Number:")
+                                .fontWeight(.bold)
+                            
+                            Text("\(number)")
+                                .font(.system(.title2, design: .monospaced))
+                                .fontWeight(.medium)
+                        }
+                        
+                        HStack {
+                            Text("Status:")
+                                .fontWeight(.bold)
+                            
+                            let isPrime = PrimeGenerator.isPrime(number)
+                            
+                            Text(isPrime ? "Prime" : "Not Prime")
+                                .foregroundColor(isPrime ? .green : .red)
+                                .fontWeight(.medium)
+                        }
+                        
+                        if !PrimeGenerator.isPrime(number) {
+                            Divider()
+                            
+                            Text("Factors:")
+                                .fontWeight(.bold)
+                            
+                            Text(factorsString(for: number))
+                                .font(.system(.body, design: .monospaced))
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                
+                // Prime type info (if applicable)
+                if let primeType = visualizationController.getPrimeTypeForNumber(number) {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Prime Type:")
+                                    .fontWeight(.bold)
+                                
+                                Text(primeType.displayName)
+                            }
+                            
+                            HStack(spacing: 8) {
+                                Text("Color:")
+                                    .fontWeight(.bold)
+                                
+                                Rectangle()
+                                    .fill(configController.configuration.colors[primeType.rawValue] ?? .black)
+                                    .frame(width: 20, height: 20)
+                                    .cornerRadius(4)
+                            }
+                            
+                            Divider()
+                            
+                            Text("Description:")
+                                .fontWeight(.bold)
+                            
+                            Text(primeType.description)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    
+                    // Additional properties based on prime type
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Special Properties:")
+                                .fontWeight(.bold)
+                            
+                            switch primeType {
+                            case .twinPrime:
+                                Text("Twin pair: \(number) and \(number > 2 ? number - 2 : number + 2)")
+                            case .sophieGermainPrime:
+                                Text("2*\(number)+1 = \(2*number+1) is also prime")
+                            case .safePrime:
+                                Text("(\(number)-1)/2 = \((number-1)/2) is also prime")
+                            case .happyPrime:
+                                Text("Repeated sum of squared digits reaches 1")
+                            case .palindromicPrime:
+                                Text("\(number) reads the same forwards and backwards")
+                            case .circularPrime:
+                                Text("All digit rotations of \(number) are prime")
+                            default:
+                                Text("See description above")
+                            }
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                
+                // Number theory facts
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Number Facts:")
+                            .fontWeight(.bold)
+                        
+                        if PrimeGenerator.isPrime(number) {
+                            Text("Position in sequence of primes: calculation requires full prime database")
+                                .font(.caption)
+                        }
+                        
+                        Text("Binary: \(String(number, radix: 2))")
+                        Text("Hexadecimal: \(String(number, radix: 16).uppercased())")
+                        
+                        if number > 0 {
+                            Text("Square: \(number * number)")
+                            if number <= 20 { // Avoid factorial overflow
+                                Text("Factorial: \(factorial(number))")
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding()
@@ -1990,6 +2425,33 @@ struct ControlPanel: View {
         
         configController.updateGridSettings(newGridSettings)
     }
+    
+    private func factorsString(for number: Int) -> String {
+        if number < 2 {
+            return number == 0 ? "None (Zero)" : "1"
+        }
+        
+        var factors = [Int]()
+        let sqrtNum = Int(sqrt(Double(number)))
+        
+        for i in 1...sqrtNum {
+            if number % i == 0 {
+                factors.append(i)
+                if i != number / i {
+                    factors.append(number / i)
+                }
+            }
+        }
+        
+        return factors.sorted().map(String.init).joined(separator: ", ")
+    }
+    
+    private func factorial(_ n: Int) -> Int {
+        if n <= 1 {
+            return 1
+        }
+        return n * factorial(n - 1)
+    }
 }
 
 // MARK: - StatRow View
@@ -2006,6 +2468,287 @@ struct StatRow: View {
             Text(value)
                 .font(.subheadline)
                 .fontWeight(.medium)
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/InteractiveVisualizationView.swift
+
+```swift
+import SwiftUI
+import AppKit
+
+struct InteractiveVisualizationView: View {
+    @ObservedObject var controller: VisualizationController
+    @State private var selectedNumber: Int? = nil
+    @State private var hoveredNumber: Int? = nil
+    @State private var zoomLevel: Double = 1.0
+    @State private var viewportOffset: CGPoint = .zero
+    @State private var isDragging: Bool = false
+    @State private var previousDragLocation: CGPoint?
+    
+    let columns: Int
+    let rows: Int
+    let dotSize: Int
+    let spacing: Int
+    let colors: [String: Color]
+    let backgroundColor: Color
+    
+    private var effectiveDotSize: CGFloat {
+        CGFloat(dotSize) * zoomLevel
+    }
+    
+    private var effectiveSpacing: CGFloat {
+        CGFloat(spacing) * zoomLevel
+    }
+    
+    private var gridWidth: CGFloat {
+        CGFloat(columns) * (effectiveDotSize + effectiveSpacing) - effectiveSpacing
+    }
+    
+    private var gridHeight: CGFloat {
+        CGFloat(rows) * (effectiveDotSize + effectiveSpacing) - effectiveSpacing
+    }
+    
+    var body: some View {
+        ZStack {
+            backgroundColor
+                .ignoresSafeArea()
+            
+            ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                ZStack {
+                    // Background color for scrollable area
+                    backgroundColor
+                        .frame(width: max(gridWidth, 100), height: max(gridHeight, 100))
+                    
+                    // Draw all prime number dots
+                    ForEach(1..<(columns * rows), id: \.self) { position in
+                        if isPrime(position) || position == selectedNumber || position == hoveredNumber {
+                            let x = (position - 1) % columns
+                            let y = (position - 1) / columns
+                            
+                            let posX = CGFloat(x) * (effectiveDotSize + effectiveSpacing)
+                            let posY = CGFloat(y) * (effectiveDotSize + effectiveSpacing)
+                            
+                            let isSelected = selectedNumber == position
+                            let isHovered = hoveredNumber == position
+                            
+                            ZStack {
+                                // Background circle
+                                if isPrime(position) {
+                                    let primeType = getPrimeType(position)
+                                    Circle()
+                                        .fill(colors[primeType?.rawValue ?? "regular_prime"] ?? .black)
+                                        .frame(width: effectiveDotSize, height: effectiveDotSize)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(isSelected ? Color.white : Color.clear, lineWidth: isSelected ? 2 : 0)
+                                        )
+                                        .overlay(
+                                            Circle()
+                                                .stroke(isHovered ? Color.yellow : Color.clear, lineWidth: isHovered ? 1 : 0)
+                                        )
+                                } else {
+                                    // Non-prime but selected or hovered
+                                    Circle()
+                                        .stroke(isSelected ? Color.white : Color.gray, lineWidth: 1)
+                                        .frame(width: effectiveDotSize, height: effectiveDotSize)
+                                }
+                                
+                                // Number text
+                                if effectiveDotSize >= 16 || isSelected || isHovered {
+                                    Text("\(position)")
+                                        .font(.system(size: min(effectiveDotSize * 0.6, 12)))
+                                        .foregroundColor(getTextColor(position, isSelected: isSelected))
+                                }
+                            }
+                            .position(x: posX + effectiveDotSize/2, y: posY + effectiveDotSize/2)
+                            .contentShape(Circle())
+                            .onTapGesture {
+                                if selectedNumber == position {
+                                    selectedNumber = nil
+                                } else {
+                                    selectedNumber = position
+                                }
+                                controller.selectedNumber = selectedNumber
+                            }
+                            .onHover { hovering in
+                                if hovering {
+                                    hoveredNumber = position
+                                } else if hoveredNumber == position {
+                                    hoveredNumber = nil
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(width: max(gridWidth, 100), height: max(gridHeight, 100))
+                .scaleEffect(zoomLevel)
+            }
+            .background(backgroundColor)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Overlay controls
+            VStack {
+                HStack {
+                    Spacer()
+                    
+                    // Zoom controls
+                    HStack(spacing: 4) {
+                        Button(action: {
+                            zoomLevel = max(zoomLevel * 0.8, 0.1)
+                        }) {
+                            Image(systemName: "minus.magnifyingglass")
+                                .padding(4)
+                        }
+                        .buttonStyle(.borderless)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(6)
+                        
+                        Button(action: {
+                            zoomLevel = 1.0
+                        }) {
+                            Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+                                .padding(4)
+                        }
+                        .buttonStyle(.borderless)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(6)
+                        
+                        Button(action: {
+                            zoomLevel = min(zoomLevel * 1.25, 5.0)
+                        }) {
+                            Image(systemName: "plus.magnifyingglass")
+                                .padding(4)
+                        }
+                        .buttonStyle(.borderless)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(6)
+                        
+                        Text("\(Int(zoomLevel * 100))%")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(6)
+                    }
+                    .padding(8)
+                }
+                
+                Spacer()
+                
+                // Selected number details
+                if let selectedNum = selectedNumber {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Number: \(selectedNum)")
+                                .font(.headline)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                selectedNumber = nil
+                                controller.selectedNumber = nil
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        
+                        if isPrime(selectedNum), let primeType = getPrimeType(selectedNum) {
+                            HStack {
+                                Text("Type:")
+                                    .fontWeight(.medium)
+                                
+                                Text(primeType.displayName)
+                                
+                                Rectangle()
+                                    .fill(colors[primeType.rawValue] ?? .black)
+                                    .frame(width: 16, height: 16)
+                                    .cornerRadius(2)
+                            }
+                            
+                            Text(primeType.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Not a prime number")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+                    .padding()
+                }
+            }
+        }
+        .onAppear {
+            // Initialize the view
+            selectedNumber = controller.selectedNumber
+            zoomLevel = controller.zoomLevel
+            
+            // Set up scroll-wheel zoom monitoring
+            setupScrollWheelMonitoring()
+        }
+        .onChange(of: selectedNumber) { oldValue, newValue in
+            controller.selectedNumber = newValue
+        }
+        .onChange(of: controller.selectedNumber) { oldValue, newValue in
+            selectedNumber = newValue
+        }
+        .onChange(of: zoomLevel) { oldValue, newValue in
+            controller.zoomLevel = newValue
+        }
+        .onChange(of: controller.zoomLevel) { oldValue, newValue in
+            zoomLevel = newValue
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func isPrime(_ n: Int) -> Bool {
+        PrimeGenerator.isPrime(n)
+    }
+    
+    private func getPrimeType(_ n: Int) -> PrimeType? {
+        if !isPrime(n) {
+            return nil
+        }
+        return PrimeClassifier.classifyPrime(n, primesSet: PrimeGenerator.generatePrimesSet(upTo: n + 10))
+    }
+    
+    private func getTextColor(_ number: Int, isSelected: Bool) -> Color {
+        if !isPrime(number) {
+            return isSelected ? .white : .gray
+        }
+        
+        if let type = getPrimeType(number), let color = colors[type.rawValue] {
+            let components = color.cgColor?.components ?? [0, 0, 0, 1]
+            let brightness = ((components[0] * 299) + (components[1] * 587) + (components[2] * 114)) / 1000
+            
+            return brightness > 0.5 ? .black : .white
+        }
+        
+        return .white
+    }
+    
+    private func setupScrollWheelMonitoring() {
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            // If command/control key is pressed, use for zoom
+            if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+                let zoomFactor = event.deltaY > 0 ? 1.1 : 0.9
+                DispatchQueue.main.async {
+                    let newZoom = self.zoomLevel * zoomFactor
+                    self.zoomLevel = min(max(newZoom, 0.1), 5.0)
+                }
+                // Consume the event so it doesn't also trigger scroll
+                return nil
+            }
+            // Let other scroll events pass through
+            return event
         }
     }
 }
@@ -2064,6 +2807,7 @@ import UniformTypeIdentifiers
 struct MainView: View {
     @StateObject private var configController = ConfigurationController()
     @StateObject private var visualizationController: VisualizationController
+    @StateObject private var documentHandler = ImageDocumentHandler()
     
     @State private var isShowingLegend = false
     @State private var isShowingAbout = false
@@ -2083,7 +2827,7 @@ struct MainView: View {
             )
             .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
         } detail: {
-            VisualizationView(controller: visualizationController)
+            mainContentView
                 .frame(minWidth: 500, minHeight: 400)
         }
         .toolbar {
@@ -2103,8 +2847,20 @@ struct MainView: View {
                 }) {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
-                .disabled(visualizationController.currentImage == nil || visualizationController.isGenerating)
+                .disabled(visualizationController.isGenerating)
                 .help("Save visualization as image")
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    visualizationController.toggleVisualizationMode()
+                }) {
+                    Label(
+                        visualizationController.visualizationMode == .interactive ? "Image Mode" : "Interactive Mode",
+                        systemImage: visualizationController.visualizationMode == .interactive ? "photo" : "hand.tap"
+                    )
+                }
+                .help(visualizationController.visualizationMode == .interactive ? "Switch to image mode" : "Switch to interactive mode")
             }
             
             ToolbarItem(placement: .automatic) {
@@ -2130,7 +2886,6 @@ struct MainView: View {
             NavigationStack {
                 LegendView(colors: configController.configuration.colors)
                     .navigationTitle("Prime Types Legend")
-                    // navigationBarTitleDisplayMode not available in macOS
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") {
@@ -2145,7 +2900,6 @@ struct MainView: View {
             NavigationStack {
                 AboutView()
                     .navigationTitle("About")
-                    // navigationBarTitleDisplayMode not available in macOS
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") {
@@ -2156,16 +2910,22 @@ struct MainView: View {
                     .frame(width: 400, height: 450)
             }
         }
-        .fileExporter(
-            isPresented: $isShowingSaveDialog,
-            document: ImageDocument(image: visualizationController.currentImage),
-            contentType: .png,
-            defaultFilename: "prime_visualization"
-        ) { result in
-            if case .success(let url) = result {
-                print("Image saved to \(url.path)")
+        Button(action: {
+                documentHandler.saveImage(visualizationController.currentImage,
+                                         filename: "prime_visualization") { result in
+                    switch result {
+                    case .success(let url):
+                        print("Image saved to \(url.path)")
+                    case .failure(let error):
+                        print("Failed to save image: \(error.localizedDescription)")
+                    }
+                }
+            }) {
+                Label("Save", systemImage: "square.and.arrow.down")
             }
-        }
+            .disabled(visualizationController.currentImage == nil ||
+                      visualizationController.isGenerating)
+            .help("Save visualization as image")
         .alert(
             "Error",
             isPresented: Binding<Bool>(
@@ -2179,39 +2939,69 @@ struct MainView: View {
             Text(errorMessage)
         }
     }
-}
-
-// MARK: - ImageDocument for file export
-struct ImageDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.png] }
     
-    var image: NSImage?
+    // MARK: - Main Content View
     
-    init(image: NSImage?) {
-        self.image = image
-    }
-    
-    init(configuration: ReadConfiguration) throws {
-        if let data = configuration.file.regularFileContents,
-           let nsImage = NSImage(data: data) {
-            image = nsImage
-        } else {
-            image = nil
+    private var mainContentView: some View {
+        Group {
+            if visualizationController.isGenerating {
+                loadingView
+            } else if visualizationController.primePoints.isEmpty {
+                placeholderView
+            } else if visualizationController.visualizationMode == .interactive {
+                InteractiveVisualizationView(
+                    controller: visualizationController,
+                    columns: configController.configuration.grid.columns,
+                    rows: configController.configuration.grid.rows,
+                    dotSize: configController.configuration.grid.dotSize,
+                    spacing: configController.configuration.grid.spacing,
+                    colors: configController.configuration.colors,
+                    backgroundColor: configController.configuration.grid.backgroundColor
+                )
+            } else {
+                // Traditional image view
+                VisualizationView(controller: visualizationController)
+            }
         }
     }
     
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data: Data
-        
-        if let image = image, let tiffData = image.tiffRepresentation,
-           let bitmapRep = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
-            data = pngData
-        } else {
-            throw CocoaError(.fileWriteUnknown)
+    private var loadingView: some View {
+        VStack {
+            ProgressView()
+                .scaleEffect(1.5)
+            
+            Text("Generating visualization...")
+                .font(.headline)
+                .padding(.top, 20)
         }
-        
-        return .init(regularFileWithContents: data)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var placeholderView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "square.grid.3x3.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .foregroundColor(.secondary)
+                .opacity(0.5)
+            
+            Text("No visualization generated")
+                .font(.title2)
+                .foregroundColor(.secondary)
+            
+            Text("Use the controls on the left panel to configure and generate a visualization.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+            
+            Button("Generate Visualization") {
+                visualizationController.generateVisualization()
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 ```
@@ -2261,7 +3051,7 @@ struct VisualizationView: View {
                         // Auto-fit the image when it first appears
                         autoFitImage(image, in: geometry.size)
                     }
-                    .onChange(of: geometry.size) { newSize in
+                    .onChange(of: geometry.size) { oldSize, newSize in
                         // Adjust zoom when window size changes
                         autoFitImage(image, in: newSize)
                     }
@@ -2388,6 +3178,529 @@ struct VisualizationView: View {
 }
 ```
 
+### File: PrimeVisualizer/Views/Components/NavigationControls.swift
+
+```swift
+import SwiftUI
+
+struct NavigationControls: View {
+    @Binding var zoomLevel: Double
+    @Binding var selectedNumber: Int?
+    let onResetView: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                zoomLevel = max(zoomLevel * 0.8, 0.1)
+            }) {
+                Image(systemName: "minus.magnifyingglass")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Zoom out")
+            
+            Button(action: {
+                onResetView()
+                zoomLevel = 1.0
+            }) {
+                Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Reset view")
+            
+            Button(action: {
+                zoomLevel = min(zoomLevel * 1.25, 5.0)
+            }) {
+                Image(systemName: "plus.magnifyingglass")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Zoom in")
+            
+            Text("\(Int(zoomLevel * 100))%")
+                .font(.caption)
+                .monospacedDigit()
+                .frame(minWidth: 44)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial)
+                .cornerRadius(6)
+            
+            Button(action: {
+                selectedNumber = nil
+            }) {
+                Image(systemName: "xmark")
+                    .padding(4)
+            }
+            .buttonStyle(.borderless)
+            .background(.ultraThinMaterial)
+            .cornerRadius(6)
+            .help("Clear selection")
+            .opacity(selectedNumber != nil ? 1.0 : 0.5)
+            .disabled(selectedNumber == nil)
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/NumberCell.swift
+
+```swift
+import SwiftUI
+
+struct NumberCell: View {
+    let number: Int
+    let size: CGFloat
+    let position: CGPoint
+    let colors: [String: Color]
+    let isSelected: Bool
+    let isHovered: Bool
+    let onTap: () -> Void
+    let onHover: (Bool) -> Void
+    
+    // Cache prime status
+    private var isPrime: Bool {
+        PrimeGenerator.isPrime(number)
+    }
+    
+    // Cache prime type
+    private var primeType: PrimeType? {
+        if isPrime {
+            return PrimeClassifier.classifyPrime(number, primesSet: PrimeGenerator.generatePrimesSet(upTo: number + 10))
+        }
+        return nil
+    }
+    
+    var body: some View {
+        ZStack {
+            if isPrime, let type = primeType {
+                Circle()
+                    .fill(colors[type.rawValue] ?? .black)
+                    .frame(width: size, height: size)
+                    .overlay(
+                        Circle()
+                            .stroke(isSelected ? Color.white : Color.clear, lineWidth: isSelected ? 2 : 0)
+                    )
+                    .overlay(
+                        Circle()
+                            .stroke(isHovered ? Color.yellow : Color.clear, lineWidth: isHovered ? 1 : 0)
+                    )
+                    .shadow(color: isSelected ? .white.opacity(0.5) : .clear, radius: isSelected ? 4 : 0)
+            } else if !isPrime && (isSelected || isHovered) {
+                // Show a placeholder for non-prime numbers that are selected or hovered
+                Circle()
+                    .stroke(isSelected ? Color.white : Color.gray, lineWidth: 1)
+                    .frame(width: size, height: size)
+            }
+            
+            // Show number if zoomed in enough or if selected/hovered
+            if size >= 16 || isSelected || isHovered {
+                Text("\(number)")
+                    .font(.system(size: min(size * 0.6, 12)))
+                    .foregroundColor(textColor())
+                    .opacity((size >= 20 || isSelected || isHovered) ? 1 : size / 20)
+            }
+        }
+        .position(x: position.x + size/2, y: position.y + size/2)
+        .onTapGesture {
+            onTap()
+        }
+        .onHover { hovering in
+            onHover(hovering)
+        }
+        // Make the cell slightly larger when hovered for better interaction
+        .scaleEffect(isHovered ? 1.1 : 1.0)
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        // Make the hit area larger than the visual size
+        .contentShape(Circle().size(CGSize(width: max(size, 20), height: max(size, 20))))
+    }
+    
+    // Determine text color based on background color
+    private func textColor() -> Color {
+        if !isPrime {
+            return isSelected ? .white : .gray
+        }
+        
+        if let type = primeType, let color = colors[type.rawValue] {
+            // Check if color is light or dark
+            let components = color.cgColor?.components ?? [0, 0, 0, 1]
+            let brightness = ((components[0] * 299) + (components[1] * 587) + (components[2] * 114)) / 1000
+            
+            return brightness > 0.5 ? .black : .white
+        }
+        
+        return .white
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/NumberDetailPanel.swift
+
+```swift
+import SwiftUI
+
+struct NumberDetailPanel: View {
+    let number: Int
+    let colors: [String: Color]
+    
+    private var isPrime: Bool {
+        PrimeGenerator.isPrime(number)
+    }
+    
+    private var primeType: PrimeType? {
+        isPrime ? PrimeClassifier.classifyPrime(number, primesSet: PrimeGenerator.generatePrimesSet(upTo: number + 10)) : nil
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Number: \(number)")
+                    .font(.headline)
+                
+                Spacer()
+                
+                if isPrime {
+                    Text("PRIME")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.green)
+                        .cornerRadius(4)
+                } else {
+                    Text("NOT PRIME")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.red)
+                        .cornerRadius(4)
+                }
+            }
+            
+            if let primeType = primeType {
+                HStack {
+                    Text("Type:")
+                        .fontWeight(.medium)
+                    
+                    Text(primeType.displayName)
+                    
+                    Rectangle()
+                        .fill(colors[primeType.rawValue] ?? .black)
+                        .frame(width: 16, height: 16)
+                        .cornerRadius(2)
+                }
+                
+                Text(primeType.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                // Enhanced prime number information
+                if primeType != .regularPrime {
+                    PrimeTypeSpecificInfo(number: number, primeType: primeType)
+                }
+            }
+            
+            // Add factors for non-prime numbers
+            if !isPrime {
+                Text("Factors: \(factorsString(for: number))")
+                    .font(.caption)
+            }
+            
+            // Add number theory information
+            NumberTheoryInfo(number: number)
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+        .frame(maxWidth: 300)
+    }
+    
+    private func factorsString(for number: Int) -> String {
+        if number < 2 {
+            return number == 0 ? "None (Zero)" : "1"
+        }
+        
+        var factors = [Int]()
+        let sqrtNum = Int(sqrt(Double(number)))
+        
+        for i in 1...sqrtNum {
+            if number % i == 0 {
+                factors.append(i)
+                if i != number / i {
+                    factors.append(number / i)
+                }
+            }
+        }
+        
+        return factors.sorted().map(String.init).joined(separator: ", ")
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/NumberTheoryInfo.swift
+
+```swift
+import SwiftUI
+
+struct NumberTheoryInfo: View {
+    let number: Int
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+                .padding(.vertical, 4)
+                
+            Text("Number Facts:")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            
+            Text("Binary: \(String(number, radix: 2))")
+                .font(.caption)
+            
+            Text("Hexadecimal: \(String(number, radix: 16).uppercased())")
+                .font(.caption)
+            
+            if number > 0 {
+                Text("Square: \(number * number)")
+                    .font(.caption)
+                
+                if number <= 20 { // Avoid factorial overflow
+                    Text("Factorial: \(factorial(number))")
+                        .font(.caption)
+                }
+            }
+            
+            if number > 1 {
+                Text("Sum of digits: \(digitSum(number))")
+                    .font(.caption)
+                
+                Text("Digital root: \(digitalRoot(number))")
+                    .font(.caption)
+            }
+        }
+    }
+    
+    private func factorial(_ n: Int) -> Int {
+        if n <= 1 {
+            return 1
+        }
+        return n * factorial(n - 1)
+    }
+    
+    private func digitSum(_ n: Int) -> Int {
+        String(n).compactMap { Int(String($0)) }.reduce(0, +)
+    }
+    
+    private func digitalRoot(_ n: Int) -> Int {
+        let sum = digitSum(n)
+        return sum < 10 ? sum : digitalRoot(sum)
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/OverlayControls.swift
+
+```swift
+import SwiftUI
+
+struct OverlayControls: View {
+    let geometry: GeometryProxy
+    @Binding var selectedNumber: Int?
+    @Binding var zoomLevel: Double
+    let colors: [String: Color]
+    let onResetView: () -> Void
+    
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                
+                NavigationControls(
+                    zoomLevel: $zoomLevel,
+                    selectedNumber: $selectedNumber,
+                    onResetView: onResetView
+                )
+                .padding(8)
+            }
+            
+            Spacer()
+            
+            if let selectedNumber = selectedNumber {
+                NumberDetailPanel(
+                    number: selectedNumber,
+                    colors: colors
+                )
+                .padding()
+            }
+        }
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/PrimeNumbersGrid.swift
+
+```swift
+import SwiftUI
+
+struct PrimeNumbersGrid: View {
+    let columns: Int
+    let rows: Int
+    let effectiveDotSize: CGFloat
+    let effectiveSpacing: CGFloat
+    let colors: [String: Color]
+    @Binding var selectedNumber: Int?
+    @Binding var hoveredNumber: Int?
+    @Environment(\.colorScheme) var colorScheme
+    
+    var body: some View {
+        ZStack {
+            // Grid background
+            if colorScheme == .dark {
+                Color(.black).opacity(0.2)
+                    .frame(
+                        width: CGFloat(columns) * (effectiveDotSize + effectiveSpacing) - effectiveSpacing,
+                        height: CGFloat(rows) * (effectiveDotSize + effectiveSpacing) - effectiveSpacing
+                    )
+            }
+            
+            // Numbers grid
+            ForEach(1..<(columns * rows), id: \.self) { position in
+                let x = (position - 1) % columns
+                let y = (position - 1) / columns
+                
+                let posX = CGFloat(x) * (effectiveDotSize + effectiveSpacing)
+                let posY = CGFloat(y) * (effectiveDotSize + effectiveSpacing)
+                
+                // Only show the cell if it's a prime or selected/hovered
+                if isPrime(position) || position == selectedNumber || position == hoveredNumber {
+                    NumberCell(
+                        number: position,
+                        size: effectiveDotSize,
+                        position: CGPoint(x: posX, y: posY),
+                        colors: colors,
+                        isSelected: selectedNumber == position,
+                        isHovered: hoveredNumber == position,
+                        onTap: {
+                            // Toggle selection
+                            if selectedNumber == position {
+                                selectedNumber = nil
+                            } else {
+                                selectedNumber = position
+                            }
+                        },
+                        onHover: { isHovered in
+                            hoveredNumber = isHovered ? position : nil
+                        }
+                    )
+                }
+            }
+        }
+    }
+    
+    // Quick prime check to improve performance
+    private func isPrime(_ n: Int) -> Bool {
+        if n <= 1 {
+            return false
+        }
+        if n <= 3 {
+            return true
+        }
+        if n % 2 == 0 || n % 3 == 0 {
+            return false
+        }
+        
+        var i = 5
+        while i * i <= n {
+            if n % i == 0 || n % (i + 2) == 0 {
+                return false
+            }
+            i += 6
+        }
+        
+        return true
+    }
+}
+```
+
+### File: PrimeVisualizer/Views/Components/PrimeTypeSpecificInfo.swift
+
+```swift
+import SwiftUI
+
+struct PrimeTypeSpecificInfo: View {
+    let number: Int
+    let primeType: PrimeType
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Special Properties:")
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .padding(.top, 4)
+            
+            switch primeType {
+            case .twinPrime:
+                let twinPair = number > 2 ? number - 2 : number + 2
+                Text("Forms a twin prime pair with \(twinPair)")
+            
+            case .mersennePrime:
+                if let exponent = getMersenneExponent(number) {
+                    Text("Has form 2^\(exponent) - 1")
+                }
+                
+            case .sophieGermainPrime:
+                Text("2 × \(number) + 1 = \(2*number+1) is also prime")
+                
+            case .safePrime:
+                Text("(\(number) - 1) ÷ 2 = \((number-1)/2) is also prime")
+                
+            case .happyPrime:
+                Text("Sum of squared digits eventually reaches 1")
+                
+            case .palindromicPrime:
+                Text("\(number) reads the same forwards and backwards")
+                
+            case .circularPrime:
+                Text("All digit rotations of \(number) are prime")
+                
+            case .sexyPrime:
+                let pair = number > 6 ? number - 6 : number + 6
+                Text("Forms a sexy prime pair with \(pair)")
+                
+            case .cubanPrime:
+                Text("Has form 3m² + 3m + 1 for some integer m")
+                
+            case .fibonacciPrime:
+                Text("Is both prime and a Fibonacci number")
+                
+            case .factorialPrime:
+                Text("Has form n! ± 1 for some integer n")
+                
+            default:
+                EmptyView()
+            }
+        }
+        .font(.caption)
+    }
+    
+    private func getMersenneExponent(_ n: Int) -> Int? {
+        var p = 2
+        while (1 << p) - 1 <= n {
+            if (1 << p) - 1 == n {
+                return p
+            }
+            p += 1
+        }
+        return nil
+    }
+}
+```
+
 ### File: Base.lproj/PrimeVis.entitlements
 
 ```entitlements
@@ -2401,8 +3714,8 @@ struct VisualizationView: View {
 
 ## Collection Summary
 
-- Total files scanned: 34
-- Files included: 28
+- Total files scanned: 46
+- Files included: 37
 - Files skipped (size): 0
 - Files with errors: 0
-- Total size of included files: 0.07MB
+- Total size of included files: 0.12MB

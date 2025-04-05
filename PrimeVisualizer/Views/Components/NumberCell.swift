@@ -7,7 +7,7 @@ struct NumberCell: View {
     let colors: [String: Color]
     let isSelected: Bool
     let isHovered: Bool
-    let onClick: () -> Void
+    let onTap: () -> Void
     let onHover: (Bool) -> Void
     
     // Cache prime status
@@ -37,22 +37,42 @@ struct NumberCell: View {
                         Circle()
                             .stroke(isHovered ? Color.yellow : Color.clear, lineWidth: isHovered ? 1 : 0)
                     )
-            }
-            
-            // Show number if zoomed in enough
-            if size >= 16 {
-                Text("\(number)")
-                    .font(.system(size: min(size * 0.5, 12)))
-                    .foregroundColor(isPrime ? (colors[primeType?.rawValue ?? ""] ?? .black).isLight() ? .black : .white : .clear)
-                    .opacity(size >= 20 ? 1 : 0)
+                    .shadow(color: isSelected ? .white.opacity(0.5) : .clear, radius: isSelected ? 4 : 0)
+            } else if !isPrime && (isSelected || isHovered) {
+                // Show a placeholder for non-prime numbers that are selected or hovered
+                Circle()
+                    .stroke(isSelected ? Color.white : Color.gray, lineWidth: 1)
+                    .frame(width: size, height: size)
             }
         }
         .position(x: position.x + size/2, y: position.y + size/2)
         .onTapGesture {
-            onClick()
+            onTap()
         }
         .onHover { hovering in
             onHover(hovering)
         }
+        // Make the cell slightly larger when hovered for better interaction
+        .scaleEffect(isHovered ? 1.1 : 1.0)
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        // Make the hit area larger than the visual size
+        .contentShape(Circle().size(CGSize(width: max(size, 20), height: max(size, 20))))
+    }
+    
+    // Determine text color based on background color
+    private func textColor() -> Color {
+        if !isPrime {
+            return isSelected ? .white : .gray
+        }
+        
+        if let type = primeType, let color = colors[type.rawValue] {
+            // Check if color is light or dark
+            let components = color.cgColor?.components ?? [0, 0, 0, 1]
+            let brightness = ((components[0] * 299) + (components[1] * 587) + (components[2] * 114)) / 1000
+            
+            return brightness > 0.5 ? .black : .white
+        }
+        
+        return .white
     }
 }

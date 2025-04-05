@@ -287,7 +287,7 @@ class ImageGenerator {
     ///   - height: Image height
     ///   - totalPositions: Total positions in the grid
     /// - Returns: VisualizationStatistics object
-    private static func generateStatistics(
+    static func generateStatistics(
         primePoints: [PrimePoint],
         columns: Int,
         rows: Int,

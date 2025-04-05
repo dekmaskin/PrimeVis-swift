@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct MainView: View {
     @StateObject private var configController = ConfigurationController()
     @StateObject private var visualizationController: VisualizationController
+    @StateObject private var documentHandler = ImageDocumentHandler()
     
     @State private var isShowingLegend = false
     @State private var isShowingAbout = false
@@ -23,7 +24,7 @@ struct MainView: View {
             )
             .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
         } detail: {
-            VisualizationView(controller: visualizationController)
+            mainContentView
                 .frame(minWidth: 500, minHeight: 400)
         }
         .toolbar {
@@ -43,8 +44,20 @@ struct MainView: View {
                 }) {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
-                .disabled(visualizationController.currentImage == nil || visualizationController.isGenerating)
+                .disabled(visualizationController.isGenerating)
                 .help("Save visualization as image")
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(action: {
+                    visualizationController.toggleVisualizationMode()
+                }) {
+                    Label(
+                        visualizationController.visualizationMode == .interactive ? "Image Mode" : "Interactive Mode",
+                        systemImage: visualizationController.visualizationMode == .interactive ? "photo" : "hand.tap"
+                    )
+                }
+                .help(visualizationController.visualizationMode == .interactive ? "Switch to image mode" : "Switch to interactive mode")
             }
             
             ToolbarItem(placement: .automatic) {
@@ -70,7 +83,6 @@ struct MainView: View {
             NavigationStack {
                 LegendView(colors: configController.configuration.colors)
                     .navigationTitle("Prime Types Legend")
-                    // navigationBarTitleDisplayMode not available in macOS
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") {
@@ -85,7 +97,6 @@ struct MainView: View {
             NavigationStack {
                 AboutView()
                     .navigationTitle("About")
-                    // navigationBarTitleDisplayMode not available in macOS
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") {
@@ -96,16 +107,22 @@ struct MainView: View {
                     .frame(width: 400, height: 450)
             }
         }
-        .fileExporter(
-            isPresented: $isShowingSaveDialog,
-            document: ImageDocument(image: visualizationController.currentImage),
-            contentType: .png,
-            defaultFilename: "prime_visualization"
-        ) { result in
-            if case .success(let url) = result {
-                print("Image saved to \(url.path)")
+        Button(action: {
+                documentHandler.saveImage(visualizationController.currentImage,
+                                         filename: "prime_visualization") { result in
+                    switch result {
+                    case .success(let url):
+                        print("Image saved to \(url.path)")
+                    case .failure(let error):
+                        print("Failed to save image: \(error.localizedDescription)")
+                    }
+                }
+            }) {
+                Label("Save", systemImage: "square.and.arrow.down")
             }
-        }
+            .disabled(visualizationController.currentImage == nil ||
+                      visualizationController.isGenerating)
+            .help("Save visualization as image")
         .alert(
             "Error",
             isPresented: Binding<Bool>(
@@ -119,38 +136,68 @@ struct MainView: View {
             Text(errorMessage)
         }
     }
-}
-
-// MARK: - ImageDocument for file export
-struct ImageDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.png] }
     
-    var image: NSImage?
+    // MARK: - Main Content View
     
-    init(image: NSImage?) {
-        self.image = image
-    }
-    
-    init(configuration: ReadConfiguration) throws {
-        if let data = configuration.file.regularFileContents,
-           let nsImage = NSImage(data: data) {
-            image = nsImage
-        } else {
-            image = nil
+    private var mainContentView: some View {
+        Group {
+            if visualizationController.isGenerating {
+                loadingView
+            } else if visualizationController.primePoints.isEmpty {
+                placeholderView
+            } else if visualizationController.visualizationMode == .interactive {
+                InteractiveVisualizationView(
+                    controller: visualizationController,
+                    columns: configController.configuration.grid.columns,
+                    rows: configController.configuration.grid.rows,
+                    dotSize: configController.configuration.grid.dotSize,
+                    spacing: configController.configuration.grid.spacing,
+                    colors: configController.configuration.colors,
+                    backgroundColor: configController.configuration.grid.backgroundColor
+                )
+            } else {
+                // Traditional image view
+                VisualizationView(controller: visualizationController)
+            }
         }
     }
     
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data: Data
-        
-        if let image = image, let tiffData = image.tiffRepresentation,
-           let bitmapRep = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
-            data = pngData
-        } else {
-            throw CocoaError(.fileWriteUnknown)
+    private var loadingView: some View {
+        VStack {
+            ProgressView()
+                .scaleEffect(1.5)
+            
+            Text("Generating visualization...")
+                .font(.headline)
+                .padding(.top, 20)
         }
-        
-        return .init(regularFileWithContents: data)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var placeholderView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "square.grid.3x3.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .foregroundColor(.secondary)
+                .opacity(0.5)
+            
+            Text("No visualization generated")
+                .font(.title2)
+                .foregroundColor(.secondary)
+            
+            Text("Use the controls on the left panel to configure and generate a visualization.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+            
+            Button("Generate Visualization") {
+                visualizationController.generateVisualization()
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

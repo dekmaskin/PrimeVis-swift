@@ -53,3 +53,17 @@ extension Color {
         return luminance > 0.5
     }
 }
+
+// MARK: - NSColor Extension
+extension NSColor {
+    /// Create NSColor from SwiftUI Color
+    convenience init(_ color: Color) {
+        let components = color.cgColor?.components ?? [0, 0, 0, 1]
+        self.init(
+            srgbRed: components[0],
+            green: components[1],
+            blue: components[2],
+            alpha: components.count > 3 ? components[3] : 1.0
+        )
+    }
+}
